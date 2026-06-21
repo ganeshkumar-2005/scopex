@@ -1,5 +1,7 @@
 # EncryptX - Full-Spectrum Infrastructure Security Auditing Toolkit
 
+![EncryptX Interactive Banner](assets/banner.png)
+
 EncryptX is an advanced, terminal-based security auditing and vulnerability scanning toolkit. Built entirely in Python with zero heavy system dependencies (such as Nmap, OpenSSL bin, or heavy network frameworks), it combines **14 basic and deep infrastructure scanners**, **7 advanced Nessus-style vulnerability plugins**, and a **custom scoring & compliance engine**. 
 
 Developed by **Ganesh Kumar**.
