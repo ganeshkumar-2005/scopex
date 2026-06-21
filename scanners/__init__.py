@@ -13,6 +13,7 @@ from .waf_detector import WAFDetector
 from .info_disclosure import InfoDisclosureScanner
 from .auth_scanner import AuthScanner
 from .api_scanner import APIScanner
+from .whois_scanner import WhoisScanner
 
 __all__ = [
     'PortScanner',
@@ -28,5 +29,6 @@ __all__ = [
     'WAFDetector',
     'InfoDisclosureScanner',
     'AuthScanner',
-    'APIScanner'
+    'APIScanner',
+    'WhoisScanner'
 ]

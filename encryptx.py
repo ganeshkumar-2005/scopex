@@ -10,7 +10,7 @@ from utils.helpers import validate_target, get_timestamp, get_readable_timestamp
 from scanners import (
     PortScanner, HeaderScanner, SSLScanner, DNSScanner, SubdomainScanner,
     VulnScanner, SQLiScanner, XSSScanner, TechFingerprinter, CookieScanner,
-    WAFDetector, InfoDisclosureScanner, AuthScanner, APIScanner
+    WAFDetector, InfoDisclosureScanner, AuthScanner, APIScanner, WhoisScanner
 )
 from reports import generate_pdf_report
 
@@ -65,6 +65,7 @@ def config():
 @click.option("--info", is_flag=True, help="Scan info disclosure risks.")
 @click.option("--auth", is_flag=True, help="Scan auth/login exposures.")
 @click.option("--api", is_flag=True, help="Scan API interface routes.")
+@click.option("--whois", is_flag=True, help="Run WHOIS domain registration lookup.")
 @click.option("--deep", is_flag=True, help="Run all deep scan vulnerability modules.")
 @click.option("--plugins", is_flag=True, help="Run all advanced Nessus-style plugins.")
 @click.option("--plugin-ssl", is_flag=True, help="Run SSL/TLS vulnerability plugin.")
@@ -76,7 +77,7 @@ def config():
 @click.option("--plugin-compliance", is_flag=True, help="Run Compliance & Scoring plugin.")
 @click.option("--all", "run_all", is_flag=True, help="Run all available basic, deep, and plugin scans.")
 @click.option("--force", "-f", is_flag=True, help="Bypass interactive scan permission confirmation.")
-def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance, run_all, force):
+def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois, deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance, run_all, force):
     """Audits targets for configuration flaws and security vulnerabilities."""
     display_banner(console)
     
@@ -84,7 +85,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
     kwargs = {
         "ports": ports, "headers": headers, "ssl": ssl, "dns": dns, "subdomains": subdomains,
         "vulns": vulns, "sqli": sqli, "xss": xss, "tech": tech, "cookies": cookies,
-        "waf": waf, "info": info, "auth": auth, "api": api, "deep": deep,
+        "waf": waf, "info": info, "auth": auth, "api": api, "whois": whois, "deep": deep,
         "plugins": plugins, "plugin_ssl": plugin_ssl, "plugin_services": plugin_services,
         "plugin_cms": plugin_cms, "plugin_network": plugin_network, "plugin_takeover": plugin_takeover,
         "plugin_ssrf": plugin_ssrf, "plugin_compliance": plugin_compliance, "run_all": run_all
@@ -116,6 +117,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
     run_dns = dns or run_all
     run_subdomains = subdomains or run_all
     run_vulns = vulns or run_all
+    run_whois = whois or run_all
     
     # Deep modules
     run_sqli = sqli or deep or run_all
@@ -128,7 +130,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
     run_api = api or deep or run_all
     
     # If no flags are provided, run a standard set of basic scans
-    if not any([ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance, run_all]):
+    if not any([ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois, deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance, run_all]):
         run_ports = run_headers = run_ssl = run_dns = run_vulns = True
 
     results = {
@@ -194,6 +196,15 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
             progress.update(t, completed=100)
             results["scans"]["dns"] = dns_res
             all_findings.extend(dns_res.get("findings", []))
+
+        # 5.5 WHOIS Lookup
+        if run_whois:
+            t = progress.add_task("[cyan]Performing WHOIS domain lookup...", total=100)
+            whois_scanner = WhoisScanner(validated_target, timeout=profile["timeout"])
+            whois_res = whois_scanner.scan()
+            progress.update(t, completed=100)
+            results["scans"]["whois"] = whois_res
+            all_findings.extend(whois_res.get("findings", []))
 
         # 6. Subdomain Enumeration
         if run_subdomains:
@@ -363,6 +374,10 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
     table.add_column("Module", justify="left")
     table.add_column("Title", justify="left")
     table.add_column("Target/URL", justify="left")
+
+    # Sort findings by severity for ordered display
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+    all_findings.sort(key=lambda f: severity_order.get(f.get("severity", "INFO").upper(), 5))
 
     for f in all_findings:
         color = severity_color(f["severity"])

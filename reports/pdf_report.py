@@ -109,38 +109,70 @@ def generate_pdf_report(scan_results: dict, output_filepath: str):
         pdf.set_font("Helvetica", "I", 10)
         pdf.cell(0, 10, "No vulnerabilities or security warnings were detected on the target system.", 0, 1)
     else:
-        for idx, f in enumerate(findings):
-            # We want every finding to start on a new line or block.
-            pdf.set_font("Helvetica", "B", 11)
-            title = f.get("title", "Security Warning")
+        # --- Sort findings by severity: CRITICAL > HIGH > MEDIUM > LOW > INFO ---
+        severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+        sorted_findings = sorted(
+            findings,
+            key=lambda f: severity_order.get(f.get("severity", "INFO").upper(), 5)
+        )
+
+        # Severity section colors: (fill_r, fill_g, fill_b, text_r, text_g, text_b)
+        severity_styles = {
+            "CRITICAL": ((180, 30, 30), (255, 255, 255)),
+            "HIGH":     ((220, 90, 20), (255, 255, 255)),
+            "MEDIUM":   ((200, 160, 20), (30, 41, 59)),
+            "LOW":      ((50, 140, 200), (255, 255, 255)),
+            "INFO":     ((100, 116, 139), (255, 255, 255)),
+        }
+
+        # Helper to draw indented fields (defined once, reused for every finding)
+        def draw_field(label, text, font_name="Helvetica", font_style="", font_size=10, color=(30, 41, 59)):
+            pdf.set_font("Helvetica", "B", 10)
+            pdf.set_text_color(100, 116, 139)  # Muted slate label
+            pdf.cell(40, 6, f"  {label}", border=0)
+
+            # Temporarily indent left margin
+            old_margin = pdf.l_margin
+            pdf.set_left_margin(50)
+
+            pdf.set_font(font_name, font_style, font_size)
+            pdf.set_text_color(*color)
+            pdf.multi_cell(0, 6, str(text), new_x="LMARGIN", new_y="NEXT")
+
+            # Restore original margin
+            pdf.set_left_margin(old_margin)
+            pdf.x = old_margin
+
+        current_severity = None
+        finding_num = 0
+
+        for f in sorted_findings:
             severity = f.get("severity", "INFO").upper()
-            
-            # Print title
+
+            # --- Print severity group header when the group changes ---
+            if severity != current_severity:
+                current_severity = severity
+                count = severity_counts.get(severity, 0)
+                fill_c, text_c = severity_styles.get(severity, ((100, 100, 100), (255, 255, 255)))
+
+                pdf.ln(6)
+                pdf.set_fill_color(*fill_c)
+                pdf.set_text_color(*text_c)
+                pdf.set_font("Helvetica", "B", 11)
+                pdf.cell(0, 9, f"  {severity}  ({count} finding{'s' if count != 1 else ''})", 0, 1, "L", True)
+                pdf.ln(3)
+
+            finding_num += 1
+            title = f.get("title", "Security Warning")
+
+            # Print finding title
             pdf.set_text_color(30, 41, 59)
-            pdf.cell(0, 8, f"{idx+1}. [{severity}] {title}", new_x="LMARGIN", new_y="NEXT")
-            
-            # Helper to draw indented fields
-            def draw_field(label, text, font_name="Helvetica", font_style="", font_size=10, color=(30, 41, 59)):
-                pdf.set_font("Helvetica", "B", 10)
-                pdf.set_text_color(100, 116, 139) # Muted slate label
-                pdf.cell(40, 6, f"  {label}", border=0)
-                
-                # Temporarily indent left margin
-                old_margin = pdf.l_margin
-                pdf.set_left_margin(50)
-                
-                pdf.set_font(font_name, font_style, font_size)
-                pdf.set_text_color(*color)
-                pdf.multi_cell(0, 6, str(text), new_x="LMARGIN", new_y="NEXT")
-                
-                # Restore original margin
-                pdf.set_left_margin(old_margin)
-                # Align cursor to the new left margin
-                pdf.x = old_margin
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.cell(0, 8, f"{finding_num}. [{severity}] {title}", new_x="LMARGIN", new_y="NEXT")
 
             # Module
             draw_field("Audit Module:", f.get("module", "General"))
-            
+
             # CVE / CVSS Info
             cves = f.get("cve_ids", [])
             cvss = f.get("cvss_score", 0.0)
@@ -149,23 +181,23 @@ def generate_pdf_report(scan_results: dict, output_filepath: str):
                 if cves:
                     info_text += f" | CVEs: {', '.join(cves)}"
                 draw_field("Vulnerability Info:", info_text, font_style="B")
-                
+
             # Description
             desc = f.get("description", "No description provided.")
             draw_field("Description:", desc)
-            
+
             # Evidence
             evidence = f.get("evidence", "No technical proof required.")
             if not evidence or evidence.strip() == "":
                 evidence = "No technical proof required."
             draw_field("Evidence / Proof:", evidence, font_name="Courier", font_size=9, color=(100, 116, 139))
-            
+
             # Remediation
             remedy = f.get("remediation", f.get("reremedy", "Apply security patches or update service settings."))
             if not remedy or remedy.strip() == "":
                 remedy = "Apply security patches or update service settings."
-            draw_field("Remediation Guide:", remedy, color=(22, 163, 74)) # Muted green for solution
-            
+            draw_field("Remediation Guide:", remedy, color=(22, 163, 74))  # Muted green for solution
+
             pdf.ln(4)
             
     pdf.output(output_filepath)
