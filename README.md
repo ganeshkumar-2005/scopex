@@ -1,6 +1,6 @@
 # ScopeX — Python-Native VAPT Toolkit
 
-![ScopeX Interactive Banner](assets/banner.png)
+![ScopeX Interactive Banner](assets/scopex_banner.png)
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
