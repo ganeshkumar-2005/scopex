@@ -23,6 +23,14 @@ Developed by **Ganesh Kumar**.
 
 ---
 
+## 💻 Terminal Scan Output
+
+Below is the real-time terminal audit view when scanning a target:
+
+![EncryptX Terminal Scan Output](assets/scan_output.png)
+
+---
+
 ## 🚀 Quick Start
 
 ### Installation
