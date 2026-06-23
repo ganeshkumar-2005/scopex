@@ -31,7 +31,7 @@ Developed by **Ganesh Kumar**.
 
 Below is the real-time terminal audit view when scanning a target:
 
-![ScopeX Terminal Scan Output](assets/scan_output.png)
+![ScopeX Terminal Scan Output](assets/scopex_scan_output.png)
 
 ---
 

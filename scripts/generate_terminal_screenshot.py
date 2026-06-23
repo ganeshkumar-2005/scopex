@@ -99,12 +99,12 @@ def generate_screenshot():
     console.print("\n[bold cyan]>> Report downloaded to your Downloads folder! <<[/bold cyan]\n")
 
     # Save to SVG
-    svg_path = "assets/scan_output.svg"
+    svg_path = "assets/scopex_scan_output.svg"
     os.makedirs(os.path.dirname(svg_path), exist_ok=True)
     console.save_svg(svg_path, title="ScopeX Vulnerability Scan")
     
     # Convert SVG to PNG via PyMuPDF
-    png_path = "assets/scan_output.png"
+    png_path = "assets/scopex_scan_output.png"
     print(f"Converting {svg_path} to {png_path}...")
     doc = fitz.open(svg_path)
     page = doc.load_page(0)
