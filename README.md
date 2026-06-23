@@ -6,8 +6,12 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-gold.svg)](CHANGELOG.md)
 [![Vulnerability Scanner](https://img.shields.io/badge/VAPT-OWASP%20%2F%20PCI--DSS-red.svg)](#)
+[![Legal Disclaimer](https://img.shields.io/badge/legal-disclaimer-red.svg)](DISCLAIMER.md)
 
 EncryptX is an advanced, terminal-based security auditing and vulnerability scanning toolkit built entirely in pure Python. It conducts high-accuracy, full-spectrum security assessments including port scanning, SQLi, XSS, SSRF, JWT auditing, and CVE mapping, and generates compliance scores and professional PDF reports without relying on heavy external binaries like Nmap or OpenSSL.
+
+> [!CAUTION]
+> **LEGAL NOTICE**: Usage of EncryptX for scanning targets without prior written authorization is strictly prohibited. Before operating, read the complete terms in [DISCLAIMER.md](DISCLAIMER.md).
 
 Developed by **Ganesh Kumar**.
 
