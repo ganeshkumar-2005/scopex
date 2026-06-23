@@ -27,6 +27,10 @@ def load_config():
             pass
     return {}
 
+def make_progress_callback(progress, task_id):
+    """Generates a progress updating callback for Rich progress bars."""
+    return lambda curr, total: progress.update(task_id, completed=int((curr / total) * 100))
+
 @click.group()
 def cli():
     """EncryptX — Terminal-Based Infrastructure Security Auditing Tool."""
@@ -164,9 +168,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
         if run_ports:
             t = progress.add_task("[cyan]Scanning open TCP ports...", total=100)
             port_scanner = PortScanner(validated_target, ports=profile["ports"], timeout=profile["timeout"])
-            def p_callback(curr, total):
-                progress.update(t, completed=int((curr / total) * 100))
-            port_res = port_scanner.scan(progress_callback=p_callback)
+            port_res = port_scanner.scan(progress_callback=make_progress_callback(progress, t))
             results["scans"]["ports"] = port_res
             all_findings.extend(port_res.get("findings", []))
 
@@ -210,9 +212,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
         if run_subdomains:
             t = progress.add_task("[cyan]Enumerating subdomains...", total=100)
             sub_scanner = SubdomainScanner(validated_target, subdomains=conf.get("dns_wordlist"))
-            def sub_callback(curr, total):
-                progress.update(t, completed=int((curr / total) * 100))
-            sub_res = sub_scanner.scan(progress_callback=sub_callback)
+            sub_res = sub_scanner.scan(progress_callback=make_progress_callback(progress, t))
             results["scans"]["subdomains"] = sub_res
             all_findings.extend(sub_res.get("findings", []))
 
@@ -247,9 +247,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
         if run_sqli:
             t = progress.add_task("[cyan]Testing SQL Injection vectors...", total=100)
             sqli_scanner = SQLiScanner(validated_target, timeout=profile["timeout"])
-            def sqli_callback(curr, total):
-                progress.update(t, completed=int((curr / total) * 100))
-            sqli_res = sqli_scanner.scan(progress_callback=sqli_callback)
+            sqli_res = sqli_scanner.scan(progress_callback=make_progress_callback(progress, t))
             results["scans"]["sqli"] = sqli_res
             all_findings.extend(sqli_res.get("findings", []))
 
@@ -257,9 +255,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
         if run_xss:
             t = progress.add_task("[cyan]Testing XSS script vulnerabilities...", total=100)
             xss_scanner = XSSScanner(validated_target, timeout=profile["timeout"])
-            def xss_callback(curr, total):
-                progress.update(t, completed=int((curr / total) * 100))
-            xss_res = xss_scanner.scan(progress_callback=xss_callback)
+            xss_res = xss_scanner.scan(progress_callback=make_progress_callback(progress, t))
             results["scans"]["xss"] = xss_res
             all_findings.extend(xss_res.get("findings", []))
 
@@ -267,9 +263,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
         if run_info:
             t = progress.add_task("[cyan]Mining info disclosure risks...", total=100)
             info_scanner = InfoDisclosureScanner(validated_target, timeout=profile["timeout"])
-            def info_callback(curr, total):
-                progress.update(t, completed=int((curr / total) * 100))
-            info_res = info_scanner.scan(progress_callback=info_callback)
+            info_res = info_scanner.scan(progress_callback=make_progress_callback(progress, t))
             results["scans"]["info"] = info_res
             all_findings.extend(info_res.get("findings", []))
 
@@ -277,9 +271,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
         if run_auth:
             t = progress.add_task("[cyan]Looking for admin/login interfaces...", total=100)
             auth_scanner = AuthScanner(validated_target, timeout=profile["timeout"])
-            def auth_callback(curr, total):
-                progress.update(t, completed=int((curr / total) * 100))
-            auth_res = auth_scanner.scan(progress_callback=auth_callback)
+            auth_res = auth_scanner.scan(progress_callback=make_progress_callback(progress, t))
             results["scans"]["auth"] = auth_res
             all_findings.extend(auth_res.get("findings", []))
 
@@ -287,9 +279,7 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
         if run_api:
             t = progress.add_task("[cyan]Discovering API routes...", total=100)
             api_scanner = APIScanner(validated_target, timeout=profile["timeout"])
-            def api_callback(curr, total):
-                progress.update(t, completed=int((curr / total) * 100))
-            api_res = api_scanner.scan(progress_callback=api_callback)
+            api_res = api_scanner.scan(progress_callback=make_progress_callback(progress, t))
             results["scans"]["api"] = api_res
             all_findings.extend(api_res.get("findings", []))
 
