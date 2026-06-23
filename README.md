@@ -46,13 +46,18 @@ Below is the real-time terminal audit view when scanning a target:
    ```
 
 2. Set up virtual environment and install dependencies:
+
+   **On Windows:**
+   ```cmd
+   python -m venv venv
+   venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+   **On macOS/Linux:**
    ```bash
    python -m venv venv
-   # On Windows:
-   venv\Scripts\activate
-   # On macOS/Linux:
    source venv/bin/activate
-   
    pip install -r requirements.txt
    ```
 
