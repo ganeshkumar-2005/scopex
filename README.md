@@ -1,5 +1,7 @@
 # EncryptX — Python-Native VAPT Toolkit
 
+![EncryptX Interactive Banner](assets/banner.png)
+
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-gold.svg)](CHANGELOG.md)
@@ -8,12 +10,6 @@
 EncryptX is an advanced, terminal-based security auditing and vulnerability scanning toolkit built entirely in pure Python. It conducts high-accuracy, full-spectrum security assessments including port scanning, SQLi, XSS, SSRF, JWT auditing, and CVE mapping, and generates compliance scores and professional PDF reports without relying on heavy external binaries like Nmap or OpenSSL.
 
 Developed by **Ganesh Kumar**.
-
----
-
-## 🖥️ Interactive Demo
-
-![EncryptX Terminal Demo](assets/demo.gif)
 
 ---
 
