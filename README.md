@@ -93,6 +93,10 @@ ScopeX matches target scope via predefined profiles:
     ```bash
     python scopex.py scan --target example.com --nuclei
     ```
+*   **Scan with Nuclei Tags & Templates Scoping**:
+    ```bash
+    python scopex.py scan --target example.com --nuclei --nuclei-tags cve,xss --nuclei-templates /path/to/templates
+    ```
 *   **Automated Scan (Non-Interactive)**:
     ```bash
     python scopex.py scan --target example.com --all --force
@@ -285,6 +289,23 @@ Below is a preview of the generated executive security report, sorted by severit
 
 *   **Probes**: Audits query fields for Local File Inclusion (LFI) and Server-Side Request Forgery (SSRF) vulnerabilities using common directory paths and loopback URLs.
 </details>
+
+---
+
+## 🧬 Nuclei Integration & Scoping
+
+ScopeX integrates seamlessly with ProjectDiscovery's **Nuclei** template-based scanner. When the `--nuclei` flag is used, ScopeX launches Nuclei in parallel as a managed subprocess, merging and deduplicating findings.
+
+### Advanced CLI Scoping Options
+*   `--nuclei-tags <tags>`: Run specific tags only (e.g., `--nuclei-tags cve,xss,sqli`).
+*   `--nuclei-templates <path>`: Run specific template files or directories (e.g., `--nuclei-templates C:\path\to\template.yaml`).
+
+### Key Enhancements & Features
+1. **Auto-Template Management**: Checks for the default templates directory (`%USERPROFILE%\nuclei-templates` on Windows or `~/nuclei-templates` on macOS/Linux). Automatically downloads/updates templates via `nuclei -update-templates` if it is missing or empty.
+2. **Version Compatibility**: Performs a startup version check. If the major version is less than `3`, prints a warning recommending an upgrade to v3+ to prevent parser incompatibility.
+3. **Robust Timeout Handling**: Implements a `600s` (10-minute) execution timeout. Exceeding this kills the process tree cleanly (preventing orphaned processes on Windows/Unix) and retrieves any partial findings written to the output file.
+4. **Error & Warning Surfacing**: Captures the process `stderr` stream and translates execution errors or non-zero exit codes into `INFO`-severity findings ("Nuclei Scan Warning") in the PDF report for full audit transparency.
+5. **Safe Parser Engine**: Employs robust JSONL parsing that skips malformed output lines without crashing, logging any skipped lines at the end.
 
 ---
 
