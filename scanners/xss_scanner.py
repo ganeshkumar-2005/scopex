@@ -126,7 +126,7 @@ class XSSScanner:
                     "severity": "MEDIUM",
                     "title": "Potential DOM-Based XSS Detected",
                     "description": f"The client-side JavaScript utilizes dynamic sources ({', '.join(dt['sources'])}) and outputs to dangerous sinks ({', '.join(dt['sinks'])}) which can facilitate DOM-based Cross-Site Scripting.",
-                    "evidence": f"Location: {dt['context']}\nSources found: {dt['sources']}\nSinks found: {dt['sinks']}\nSnippet: {dt['snippet']}",
+                    "evidence": f"Page URL: {page_url}\nLocation: {dt['context']}\nSources found: {dt['sources']}\nSinks found: {dt['sinks']}\nSnippet: {dt['snippet']}",
                     "remediation": "Avoid using dangerous sinks like innerHTML or eval. Use safe alternatives such as textContent or innerText, and implement robust sanitization using libraries like DOMPurify."
                 })
 
