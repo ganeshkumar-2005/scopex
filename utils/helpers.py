@@ -22,14 +22,11 @@ def validate_target(target: str) -> str:
     if not target:
         raise ValueError("Target cannot be empty.")
     
-    # Check if target is a full URL
-    parsed = urllib.parse.urlparse(target)
-    if parsed.scheme in ('http', 'https') and parsed.netloc:
-        # If it's a URL, return it as normalized URL
-        return target
-        
-    # Check if target contains protocol, if not add http:// by default for web requests
-    # But for general hosts/IPs, validate the regex.
+    # Check for shell metacharacters anywhere in the target string
+    shell_metachars = ('&', '|', ';', '`', '$', '>', '<', '\n', '\r')
+    if any(char in target for char in shell_metachars):
+        raise ValueError("Target contains illegal shell characters.")
+
     # Simple Host/IP regex
     host_regex = re.compile(
         r'^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\-]*[a-zA-Z0-9])\.)*([A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9\-]*[A-Za-z0-9])$'
@@ -37,7 +34,17 @@ def validate_target(target: str) -> str:
     ip_regex = re.compile(
         r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
     )
-    
+
+    # Check if target is a full URL
+    parsed = urllib.parse.urlparse(target)
+    if parsed.scheme in ('http', 'https'):
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError(f"Invalid URL host: '{target}'")
+        if not (host_regex.match(hostname) or ip_regex.match(hostname)):
+            raise ValueError(f"Invalid URL host format: '{hostname}'")
+        return target
+        
     # Strip any port if provided (e.g., host:port)
     host_only = target.split(':')[0]
     

@@ -106,3 +106,38 @@ async def test_run_success_and_parse(default_context, tmp_path):
         assert f.cvss_score == 10.0
         assert f.target == "https://example.com"
         assert "nuclei" in f.tags
+
+@pytest.mark.asyncio
+async def test_run_windows_subprocess_args_and_no_shell(default_context):
+    with patch("os.name", "nt"), \
+         patch("utils.nuclei_orchestrator.NucleiOrchestrator._get_nuclei_version", return_value="3.2.9"), \
+         patch("utils.nuclei_orchestrator.NucleiOrchestrator._ensure_templates", return_value=None), \
+         patch("asyncio.create_subprocess_exec") as mock_exec:
+        
+        mock_proc = AsyncMock()
+        mock_proc.communicate.return_value = (b"", b"")
+        mock_exec.return_value = mock_proc
+        
+        orchestrator = NucleiOrchestrator(default_context)
+        
+        with patch.object(orchestrator, "_parse_jsonl", return_value=[]):
+            findings = await orchestrator.run()
+            assert findings == []
+            
+            mock_exec.assert_called()
+            called_args = mock_exec.call_args[0]
+            assert isinstance(called_args, tuple)
+            assert len(called_args) > 1
+
+@pytest.mark.asyncio
+async def test_demo_testfire_zero_findings_no_fabrication(default_context):
+    default_context.target = "http://demo.testfire.net"
+    default_context.host = "demo.testfire.net"
+    
+    orchestrator = NucleiOrchestrator(default_context)
+    with patch.object(orchestrator, "_get_nuclei_version", return_value="3.2.9"), \
+         patch.object(orchestrator, "_ensure_templates", return_value=None), \
+         patch.object(orchestrator, "_run_nuclei", return_value=[]):
+        
+        findings = await orchestrator.run()
+        assert len(findings) == 0

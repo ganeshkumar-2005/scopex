@@ -118,7 +118,7 @@ Below is a preview of the generated executive security report, sorted by severit
 
 ---
 
-## 🛠️ Core Auditing Modules (14 Scanners)
+## 🛠️ Core Auditing Modules (16 Scanners)
 
 <details>
 <summary><b>1. Port Scanner (<code>scanners/port_scanner.py</code>)</b></summary>
@@ -235,6 +235,22 @@ Below is a preview of the generated executive security report, sorted by severit
 *   **GraphQL**: Submits introspection query payloads to `/graphql` using appropriate `application/json` structures to check for exposed database schemas.
 </details>
 
+<details>
+<summary><b>15. WHOIS Scanner (<code>scanners/whois_scanner.py</code>)</b></summary>
+<br>
+
+*   **Registration Audits**: Queries registration metadata, creation/expiration dates, DNSSEC signing status, and nameservers.
+*   **Leak Audits**: Inspects contact details to flag potential exposure of personal information (PII) in WHOIS public records.
+</details>
+
+<details>
+<summary><b>16. Custom YAML Rules Scanner (<code>scanners/custom_rules_scanner.py</code>)</b></summary>
+<br>
+
+*   **Threat Signature Profiling**: Dynamically loads custom signature profiles from the `rules/` directory.
+*   **Matching Capabilities**: Evaluates targets using signatures matching HTTP headers, body patterns, status codes, and URI path structures.
+</details>
+
 ---
 
 ## 🔌 Advanced Vulnerability Plugins
@@ -292,6 +308,14 @@ Below is a preview of the generated executive security report, sorted by severit
 *   **Probes**: Audits query fields for Local File Inclusion (LFI) and Server-Side Request Forgery (SSRF) vulnerabilities using common directory paths and loopback URLs.
 </details>
 
+<details>
+<summary><b>7. Compliance & Risk Scoring (<code>plugins/compliance.py</code>)</b></summary>
+<br>
+
+*   **Standard Mapping**: Maps detected vulnerabilities to specific security frameworks (OWASP Top 10 and PCI-DSS compliance regulations).
+*   **Grading Engine**: Generates professional, letter-grade risk assessments based on vulnerability severity weights and CVSS scores.
+</details>
+
 ---
 
 ## 🧬 Nuclei Integration & Scoping
@@ -326,7 +350,7 @@ ScopeX/
 │   ├── orchestrator.py        # Asynchronous execution orchestrator & live progress
 │   ├── context.py             # Global execution state tracker
 │   └── findings.py            # Unified standard Finding models
-├── scanners/                  # Core protocol & vulnerability modules (15)
+├── scanners/                  # Core protocol & vulnerability modules (16)
 │   ├── custom_rules_scanner.py # Dynamic YAML signature matching engine
 │   ├── api_scanner.py         # Rest/GraphQL & OpenAPI spec discovery
 │   └── ...                    # Other scanners
@@ -339,7 +363,7 @@ ScopeX/
 │   └── json_report.py         # Standardized JSON compiler
 └── utils/                     # Shared system helpers
     ├── nuclei_orchestrator.py # Nuclei parallel orchestration
-    └── Waf_evasion.py         # Dynamic firewall evasion rules
+    └── waf_evasion.py         # Dynamic firewall evasion rules
 ```
 
 ---

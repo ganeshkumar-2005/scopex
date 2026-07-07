@@ -14,10 +14,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Download and install ProjectDiscovery's Nuclei binary
-RUN LATEST_NUCLEI_URL=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest \
-    | grep -oP '"browser_download_url":\s*"\Khttps://[^"]+linux_amd64\.zip') \
-    && wget -q "$LATEST_NUCLEI_URL" -O nuclei.zip \
+# Pin stable Nuclei version. To bump: update version and SHA256 hash from release checksums file.
+ARG NUCLEI_VERSION=3.2.9
+ARG NUCLEI_SHA256=944dd1316fd57c035c1eba71633ed992b519528935e45a716d1d3cdffb6990f0
+
+# Download and install ProjectDiscovery's Nuclei binary with checksum verification
+RUN wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}/nuclei_${NUCLEI_VERSION}_linux_amd64.zip" -O nuclei.zip \
+    && echo "${NUCLEI_SHA256}  nuclei.zip" | sha256sum -c - \
     && unzip nuclei.zip \
     && mv nuclei /usr/local/bin/ \
     && rm nuclei.zip

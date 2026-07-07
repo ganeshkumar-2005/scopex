@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-07-07
+
+### Added
+- **Asynchronous Scan Orchestration Engine** (`core/orchestrator.py`) supporting concurrent scanning, checkpoints, and per-scanner timeouts.
+- **ProjectDiscovery Nuclei Integration** (`utils/nuclei_orchestrator.py`) with automatic download, execution, and deduplication of findings.
+- **Glassmorphic HTML Web Dashboard** (`reports/dashboard.py`) serving visual graphs, scans logs, and PDF downloads locally.
+- **Windows Command-Injection Prevention** by validating target URLs and hostnames and rejecting shell metacharacters in CLI target inputs.
+- **Absolute Package Path Resolution** for configuration files and output directories, ensuring reliable execution across varying current working directories.
+
 ## [1.0.0] - 2026-06-23
 
 ### Added

@@ -10,15 +10,19 @@ from utils.helpers import validate_target, get_timestamp, severity_color, severi
 from reports import generate_pdf_report
 
 console = Console()
-CONFIG_PATH = "config.json"
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+CONFIG_PATH = BASE_DIR / "config.json"
+OUTPUT_DIR = BASE_DIR / "output"
 
 def load_config():
-    if os.path.exists(CONFIG_PATH):
+    if CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            console.print(f"[bold red]Warning: config.json is invalid ({str(e)}), using defaults[/bold red]")
     return {}
 
 @click.group()
@@ -230,8 +234,8 @@ def scan(
 
     # Write output to JSON
     ts = get_timestamp()
-    os.makedirs("output", exist_ok=True)
-    output_filename = f"output/scan_{ts}.json"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_filename = str(OUTPUT_DIR / f"scan_{ts}.json")
     result_dict = result.to_dict()
     
     with open(output_filename, "w", encoding="utf-8") as f:
@@ -302,7 +306,7 @@ def report(input_file, output_file):
         console.print(f"\n[green]* Professional PDF security audit report generated![/green]")
         console.print(f"[bold white]  Saved to: {final_path}[/bold white]")
         
-        output_copy = os.path.join("output", base_name)
+        output_copy = str(OUTPUT_DIR / base_name)
         if final_path != output_copy:
             import shutil
             shutil.copy2(final_path, output_copy)

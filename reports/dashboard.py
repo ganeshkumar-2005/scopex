@@ -10,6 +10,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 from loguru import logger
+from pathlib import Path
 
 # Premium Dashboard HTML/CSS/JS template
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -672,7 +673,8 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
 
             elif self.path.startswith("/api/report/"):
                 filename = unquote(self.path[12:])
-                filepath = os.path.join("output", filename)
+                output_dir = str(Path(__file__).resolve().parent.parent / "output")
+                filepath = os.path.join(output_dir, filename)
                 if os.path.exists(filepath) and filepath.endswith(".json"):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -685,7 +687,8 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
 
             elif self.path.startswith("/api/download/"):
                 filename = unquote(self.path[14:])
-                filepath = os.path.join("output", filename)
+                output_dir = str(Path(__file__).resolve().parent.parent / "output")
+                filepath = os.path.join(output_dir, filename)
                 if os.path.exists(filepath) and filepath.endswith(".pdf"):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/pdf")
@@ -706,7 +709,7 @@ class DashboardHTTPRequestHandler(BaseHTTPRequestHandler):
 
     def _get_reports_list(self) -> List[Dict[str, Any]]:
         reports = []
-        output_dir = "output"
+        output_dir = str(Path(__file__).resolve().parent.parent / "output")
         if not os.path.exists(output_dir):
             return []
 

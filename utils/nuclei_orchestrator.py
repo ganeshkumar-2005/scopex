@@ -1,7 +1,7 @@
 """
 utils/nuclei_orchestrator.py — Intelligent Nuclei orchestration layer for ScopeX v2.
 
-Replaces nuclei_integration.py with:
+Features:
   - asyncio subprocess (non-blocking, no shell=True)
   - NucleiNotFoundError exception instead of sys.exit()
   - No hardcoded mock data
