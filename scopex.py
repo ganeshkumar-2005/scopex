@@ -107,8 +107,15 @@ def scan(
         console.print(f"[bold red]Error:[/bold red] {str(e)}")
         return
         
-    parsed_target = urllib.parse.urlparse(validated_target)
-    host = parsed_target.hostname or parsed_target.netloc
+    # Normalize target URL and host
+    if not (validated_target.startswith("http://") or validated_target.startswith("https://")):
+        host = validated_target
+        validated_target = f"https://{validated_target}"
+    else:
+        parsed_target = urllib.parse.urlparse(validated_target)
+        host = parsed_target.hostname or parsed_target.netloc
+        if not host:
+            host = validated_target
 
     console.print(f"[yellow]Target target resolved to:[/yellow] [bold cyan]{validated_target}[/bold cyan]")
     if not force:
