@@ -77,7 +77,11 @@ class ScanContext:
         host:                     Bare hostname / IP, e.g. 'example.com'.
         profile:                  Scan intensity: 'quick' | 'standard' | 'full'.
         ports:                    Ports to scan (overrides profile default when set).
-        timeout:                  Per-request timeout in seconds.
+        timeout:                  Per-request HTTP timeout in seconds.
+        scanner_timeout:          Per-scanner wall-clock timeout in seconds.
+                                  Fast scanners (headers, ssl, dns …) use half this
+                                  value; slow scanners (sqli, xss, ports …) use the
+                                  full value. Default: 120s.
         verify_ssl:               Verify TLS certificates on outbound requests.
                                   Defaults to False so ScopeX works against
                                   pentesting targets with self-signed certs.
@@ -109,6 +113,7 @@ class ScanContext:
     profile: str = "standard"          # 'quick' | 'standard' | 'full'
     ports: List[int] = field(default_factory=list)
     timeout: float = 3.0
+    scanner_timeout: float = 120.0     # per-scanner wall-clock timeout (slow scanners); fast = half
     verify_ssl: bool = False           # False = skip cert verification (pentest default)
     waf_evasion: bool = False
     waf_evasion_profile: str = "stealth"   # 'stealth' | 'aggressive' | 'bypass'

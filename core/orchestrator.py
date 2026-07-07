@@ -368,10 +368,15 @@ class ScanOrchestrator:
         fast = {k: v for k, v in active.items() if k in _FAST_SCANNERS}
         slow = {k: v for k, v in active.items() if k in _SLOW_SCANNERS}
 
+        # Derive timeouts from context (--scanner-timeout sets the slow timeout;
+        # fast scanners get half that value since they should finish quickly).
+        slow_timeout = ctx.scanner_timeout
+        fast_timeout = max(30.0, ctx.scanner_timeout / 2)
+
         # Run fast scanners concurrently
         if fast:
             tasks = [
-                self._timed_scanner(name, cls, ctx, client, timeout=60.0)
+                self._timed_scanner(name, cls, ctx, client, timeout=fast_timeout)
                 for name, cls in fast.items()
             ]
             await self._gather_results(fast.keys(), tasks, result)
@@ -380,7 +385,7 @@ class ScanOrchestrator:
         # Run slow scanners concurrently
         if slow:
             tasks = [
-                self._timed_scanner(name, cls, ctx, client, timeout=120.0)
+                self._timed_scanner(name, cls, ctx, client, timeout=slow_timeout)
                 for name, cls in slow.items()
             ]
             await self._gather_results(slow.keys(), tasks, result)

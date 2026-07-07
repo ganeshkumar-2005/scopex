@@ -93,12 +93,16 @@ def config():
 @click.option("--modules", "modules", default=None,
               help="Comma-separated scanner/plugin keys to run, e.g. headers,ssl,sqli,plugin:ssrf. "
                    "Overrides individual --headers, --ssl etc. flags when provided.")
+@click.option("--scanner-timeout", "scanner_timeout", default=120.0, show_default=True, type=float,
+              help="Per-scanner wall-clock timeout in seconds. "
+                   "Slow scanners (sqli, xss, ports) use this value; fast scanners use half. "
+                   "Increase for deep targets with many endpoints.")
 def scan(
     target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois,
     deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf,
     plugin_compliance, run_all, nuclei, nuclei_tags, nuclei_templates, force,
     auth_user, auth_pass, auth_url, resume_checkpoint, waf_evasion, skip_nuclei, output_json, output_sarif,
-    debug, verify_ssl, modules
+    debug, verify_ssl, modules, scanner_timeout
 ):
     """Audits targets for configuration flaws and security vulnerabilities."""
     import asyncio
@@ -235,6 +239,7 @@ def scan(
         profile=profile_name,
         ports=profile.get("ports", []),
         timeout=timeout,
+        scanner_timeout=scanner_timeout,
         verify_ssl=verify_ssl,
         waf_evasion=waf_evasion_enabled,
         waf_evasion_profile=waf_evasion_profile,
