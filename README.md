@@ -87,6 +87,10 @@ ScopeX matches target scope via predefined profiles:
     ```bash
     python scopex.py scan --target example.com --all
     ```
+*   **Select Specific Modules** (`--modules` composite flag):
+    ```bash
+    python scopex.py scan --target example.com --modules headers,ssl,sqli,plugin:ssrf
+    ```
 *   **Deep Web Vulnerabilities Scan Only** (SQLi, XSS, WAF, API):
     ```bash
     python scopex.py scan --target example.com --deep
@@ -103,12 +107,38 @@ ScopeX matches target scope via predefined profiles:
     ```bash
     python scopex.py scan --target example.com --all --force
     ```
+*   **Export SARIF for GitHub Code-Scanning**:
+    ```bash
+    python scopex.py scan --target example.com --all --output-sarif results.sarif
+    ```
 *   **Generate PDF Report**:
     ```bash
     python scopex.py report --input output/scan_20260623_080000.json
     ```
 
+### Shell Completion
+
+ScopeX is built with [Click](https://click.palletsprojects.com/), which supports tab-completion natively. Run the snippet for your shell **once** and restart your shell session:
+
+**Bash** (`~/.bashrc`):
+```bash
+_SCOPEX_COMPLETE=bash_source scopex >> ~/.bashrc
+```
+
+**Zsh** (`~/.zshrc`):
+```zsh
+_SCOPEX_COMPLETE=zsh_source scopex >> ~/.zshrc
+```
+
+**Fish** (`~/.config/fish/completions/scopex.fish`):
+```fish
+_SCOPEX_COMPLETE=fish_source scopex > ~/.config/fish/completions/scopex.fish
+```
+
+After restarting your shell, press `Tab` after `scopex scan --` to see all available flags.
+
 ---
+
 
 ## 📄 Professional PDF Report Sample
 

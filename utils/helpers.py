@@ -91,12 +91,14 @@ def severity_icon(severity: str) -> str:
 
 def make_web_request(url: str, method: str = "GET", headers: dict = None, 
                      params: dict = None, data=None, json_data=None, timeout: float = 5.0, 
-                     allow_redirects: bool = True) -> httpx.Response:
+                     allow_redirects: bool = True, verify: bool = False) -> httpx.Response:
     """Helper wrapper to execute web requests safely with standard user agent.
     
     Args:
         json_data: If provided, sends as JSON body (Content-Type: application/json).
                    Mutually exclusive with data - json_data takes priority if both given.
+        verify:    Verify TLS certificates. Default False to support pentest targets
+                   that use self-signed certs.
     """
     default_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -105,7 +107,7 @@ def make_web_request(url: str, method: str = "GET", headers: dict = None,
         default_headers.update(headers)
         
     try:
-        with httpx.Client(verify=False, follow_redirects=allow_redirects) as client:
+        with httpx.Client(verify=verify, follow_redirects=allow_redirects) as client:
             response = client.request(
                 method=method,
                 url=url,
@@ -119,3 +121,5 @@ def make_web_request(url: str, method: str = "GET", headers: dict = None,
     except httpx.RequestError as e:
         # Re-raise or return None to let scanner handle network issues
         raise e
+
+

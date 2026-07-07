@@ -93,22 +93,38 @@ class NucleiOrchestrator:
                 )
         self.log.info(f"Nuclei {version} found")
 
-        tags = self._determine_tags(existing_findings)
+        tags, skip_cves = self._determine_tags(existing_findings)
         self.log.info(f"Running Nuclei with tags: {tags}")
+        if skip_cves:
+            self.log.info(f"Skipping {len(skip_cves)} CVE template(s) already found by ScopeX: {sorted(skip_cves)}")
 
         await self._ensure_templates()
 
-        findings = await self._run_nuclei(tags, timeout)
+        findings = await self._run_nuclei(tags, timeout, skip_cves=skip_cves)
         self.log.info(f"Nuclei returned {len(findings)} findings")
         return findings
 
-    def _determine_tags(self, existing_findings: List[Finding]) -> List[str]:
-        """Smart tag selection based on discovered technologies and existing findings."""
+    def _determine_tags(
+        self, existing_findings: List[Finding]
+    ) -> tuple:
+        """Smart tag selection based on discovered technologies and existing findings.
+
+        Returns:
+            A (tags, skip_cves) tuple where:
+            - tags: sorted list of Nuclei tags to run (empty list = run all)
+            - skip_cves: set of CVE IDs already found by ScopeX scanners that
+              should be excluded from Nuclei via ``-exclude-id`` to avoid
+              redundant work and duplicate findings.
+        """
+        # Collect CVEs already discovered by ScopeX scanners
+        existing_cves: set = {f.cve for f in existing_findings if f.cve}
+
         # User explicitly specified tags via CLI — use them directly
+        # We still honour CVE-skip even for user-specified tags.
         if self.ctx.nuclei_tags:
             if self.ctx.nuclei_tags == ["all"] or self.ctx.nuclei_tags == "all":
-                return []  # No tag filter = run all templates
-            return list(self.ctx.nuclei_tags)
+                return [], existing_cves  # No tag filter = run all templates
+            return list(self.ctx.nuclei_tags), existing_cves
 
         tags = set(self.BASE_TAGS)
 
@@ -119,12 +135,7 @@ class NucleiOrchestrator:
                 if key in tech_lower:
                     tags.update(tech_tags)
 
-        # Skip redundant templates for CVEs already found by ScopeX
-        existing_cves = {f.cve for f in existing_findings if f.cve}
-        if existing_cves:
-            self.log.debug(f"Existing CVEs (will skip redundant templates): {existing_cves}")
-
-        return sorted(tags)
+        return sorted(tags), existing_cves
 
     async def _get_nuclei_version(self) -> Optional[str]:
         """Check if Nuclei is installed and return version string."""
@@ -178,8 +189,20 @@ class NucleiOrchestrator:
         except Exception as exc:
             self.log.warning(f"Template download failed: {exc}")
 
-    async def _run_nuclei(self, tags: List[str], timeout: int) -> List[Finding]:
-        """Run Nuclei subprocess and parse JSONL output."""
+    async def _run_nuclei(
+        self,
+        tags: List[str],
+        timeout: int,
+        skip_cves: Optional[set] = None,
+    ) -> List[Finding]:
+        """Run Nuclei subprocess and parse JSONL output.
+
+        Args:
+            tags:      Nuclei tag filter (empty list = no filter).
+            timeout:   Maximum seconds to wait for Nuclei to finish.
+            skip_cves: CVE IDs already found by ScopeX; excluded via
+                       ``-exclude-id`` so Nuclei skips redundant templates.
+        """
         nuclei_bin = self._find_nuclei_binary()
         temp_output = Path(tempfile.gettempdir()) / f"nuclei_{uuid.uuid4().hex}.jsonl"
 
@@ -194,6 +217,11 @@ class NucleiOrchestrator:
             cmd.extend(["-tags", ",".join(tags)])
         if self.ctx.nuclei_templates:
             cmd.extend(["-t", self.ctx.nuclei_templates])
+        # Exclude Nuclei templates whose CVE IDs are already covered by ScopeX.
+        # Nuclei accepts the CVE ID (e.g. CVE-2021-44228) directly as a template ID.
+        if skip_cves:
+            for cve_id in sorted(skip_cves):
+                cmd.extend(["-exclude-id", cve_id])
 
         self.log.debug(f"Nuclei command: {' '.join(cmd)}")
 

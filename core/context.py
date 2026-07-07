@@ -78,6 +78,10 @@ class ScanContext:
         profile:                  Scan intensity: 'quick' | 'standard' | 'full'.
         ports:                    Ports to scan (overrides profile default when set).
         timeout:                  Per-request timeout in seconds.
+        verify_ssl:               Verify TLS certificates on outbound requests.
+                                  Defaults to False so ScopeX works against
+                                  pentesting targets with self-signed certs.
+                                  Set to True for production-posture audits.
         waf_evasion:              Enable WAF evasion techniques.
         waf_evasion_profile:      'stealth' | 'aggressive' | 'bypass'.
         auth:                     Optional :class:`AuthContext`.
@@ -105,6 +109,7 @@ class ScanContext:
     profile: str = "standard"          # 'quick' | 'standard' | 'full'
     ports: List[int] = field(default_factory=list)
     timeout: float = 3.0
+    verify_ssl: bool = False           # False = skip cert verification (pentest default)
     waf_evasion: bool = False
     waf_evasion_profile: str = "stealth"   # 'stealth' | 'aggressive' | 'bypass'
     auth: Optional[AuthContext] = None

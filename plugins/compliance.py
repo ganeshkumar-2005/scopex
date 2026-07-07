@@ -20,6 +20,8 @@ class CompliancePlugin(BasePlugin):
         """Process findings, map to compliance controls, and grade security posture."""
         self.map_owasp_top_10()
         self.check_pci_dss()
+        self.check_cis_benchmarks()
+        self.check_soc2()
         self.calculate_security_grade()
         return self.get_results()
 
@@ -123,6 +125,130 @@ class CompliancePlugin(BasePlugin):
                 evidence="Complied with basic TLS protocols, cipher, and access checks.",
                 remediation="Continue routine audits to monitor state changes.",
                 cvss=0.0
+            )
+
+    def check_cis_benchmarks(self):
+        """Maps findings to CIS Controls v8 sub-families (Access Control, Data Protection, Audit/Log, Network Defence)."""
+        cis_controls = {
+            "CIS-1":  {"name": "Inventory and Control of Enterprise Assets", "failures": []},
+            "CIS-3":  {"name": "Data Protection", "failures": []},
+            "CIS-4":  {"name": "Secure Configuration of Enterprise Assets and Software", "failures": []},
+            "CIS-6":  {"name": "Access Control Management", "failures": []},
+            "CIS-8":  {"name": "Audit Log Management", "failures": []},
+            "CIS-9":  {"name": "Email and Web Browser Protections", "failures": []},
+            "CIS-12": {"name": "Network Infrastructure Management", "failures": []},
+            "CIS-13": {"name": "Network Monitoring and Defence", "failures": []},
+            "CIS-16": {"name": "Application Software Security", "failures": []},
+        }
+
+        for f in self.existing_findings:
+            title = f.get("title", "").lower()
+            sev = f.get("severity", "INFO").upper()
+            if sev in ("INFO",):
+                continue  # Only map actionable findings
+
+            if any(t in title for t in ["port", "service", "open", "banner"]):
+                cis_controls["CIS-1"]["failures"].append(f.get("title"))
+                cis_controls["CIS-12"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["ssl", "tls", "cipher", "hsts", "crypt", "cert"]):
+                cis_controls["CIS-3"]["failures"].append(f.get("title"))
+                cis_controls["CIS-4"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["header", "cookie", "csp", "cors", "xframe", "referrer"]):
+                cis_controls["CIS-4"]["failures"].append(f.get("title"))
+                cis_controls["CIS-16"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["auth", "admin", "login", "credential", "password"]):
+                cis_controls["CIS-6"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["log", "monitor", "trace", "debug"]):
+                cis_controls["CIS-8"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["xss", "inject", "sqli", "rfi", "lfi", "ssrf", "traversal"]):
+                cis_controls["CIS-16"]["failures"].append(f.get("title"))
+                cis_controls["CIS-13"]["failures"].append(f.get("title"))
+
+        triggered = {k: v for k, v in cis_controls.items() if v["failures"]}
+        if triggered:
+            details = "; ".join(
+                f"{k} ({v['name']}): {len(set(v['failures']))} issue(s)"
+                for k, v in triggered.items()
+            )
+            self.add_finding(
+                title="CIS Controls v8: Gaps Identified",
+                severity="MEDIUM",
+                description=(
+                    f"{len(triggered)} CIS Control families have associated findings. "
+                    "Review each control sub-family for remediation guidance."
+                ),
+                evidence=details,
+                remediation=(
+                    "Consult the CIS Controls v8 implementation guide at "
+                    "https://www.cisecurity.org/controls/v8 and address each flagged control family."
+                ),
+                cvss=0.0,
+            )
+        else:
+            self.add_finding(
+                title="CIS Controls v8: No Gaps Detected",
+                severity="INFO",
+                description="No actionable findings mapped to CIS Controls v8 sub-families.",
+                evidence="All checked CIS control families appear compliant based on current scan findings.",
+                remediation="Continue routine audits.",
+                cvss=0.0,
+            )
+
+    def check_soc2(self):
+        """Maps findings to SOC 2 Trust Service Criteria (CC6, CC7, CC8)."""
+        soc2_criteria = {
+            "CC6": {"name": "Logical and Physical Access Controls", "failures": []},
+            "CC7": {"name": "System Operations (Monitoring & Incident Response)", "failures": []},
+            "CC8": {"name": "Change Management", "failures": []},
+            "CC9": {"name": "Risk Mitigation", "failures": []},
+            "A1":  {"name": "Availability", "failures": []},
+        }
+
+        for f in self.existing_findings:
+            title = f.get("title", "").lower()
+            sev = f.get("severity", "INFO").upper()
+            if sev in ("INFO",):
+                continue
+
+            if any(t in title for t in ["auth", "admin", "login", "credential", "access", "cors", "takeover"]):
+                soc2_criteria["CC6"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["log", "monitor", "trace", "error disclosure", "debug"]):
+                soc2_criteria["CC7"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["version", "outdated", "vulnerable component", "cve"]):
+                soc2_criteria["CC8"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["ssrf", "lfi", "rfi", "inject", "xss", "sqli"]):
+                soc2_criteria["CC9"]["failures"].append(f.get("title"))
+            if any(t in title for t in ["port", "service", "open", "availability"]):
+                soc2_criteria["A1"]["failures"].append(f.get("title"))
+
+        triggered = {k: v for k, v in soc2_criteria.items() if v["failures"]}
+        if triggered:
+            details = "; ".join(
+                f"{k} ({v['name']}): {len(set(v['failures']))} issue(s)"
+                for k, v in triggered.items()
+            )
+            self.add_finding(
+                title="SOC 2 Trust Service Criteria: Gaps Identified",
+                severity="MEDIUM",
+                description=(
+                    f"{len(triggered)} SOC 2 Trust Service Criteria have associated findings. "
+                    "These gaps may affect SOC 2 Type II audit readiness."
+                ),
+                evidence=details,
+                remediation=(
+                    "Engage your auditor to review each criterion and implement the recommended "
+                    "controls from the AICPA Trust Services Criteria guide."
+                ),
+                cvss=0.0,
+            )
+        else:
+            self.add_finding(
+                title="SOC 2 Trust Service Criteria: No Gaps Detected",
+                severity="INFO",
+                description="No actionable findings mapped to SOC 2 Trust Service Criteria.",
+                evidence="All checked SOC 2 criteria appear compliant based on current scan findings.",
+                remediation="Continue routine audits.",
+                cvss=0.0,
             )
 
     def calculate_security_grade(self):

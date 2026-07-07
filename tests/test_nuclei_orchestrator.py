@@ -12,25 +12,42 @@ from utils.nuclei_orchestrator import NucleiOrchestrator, NucleiNotFoundError
 def test_determine_tags(default_context):
     orchestrator = NucleiOrchestrator(default_context)
 
-    # 1. Base tags only
-    tags = orchestrator._determine_tags([])
+    # 1. Base tags only — returns (tags, skip_cves) tuple
+    tags, skip_cves = orchestrator._determine_tags([])
     assert "http" in tags
     assert "ssl" in tags
+    assert skip_cves == set()  # no existing CVEs
 
     # 2. Tech-based tags
     default_context.discovered_technologies = ["WordPress 6.0", "Nginx"]
-    tags = orchestrator._determine_tags([])
+    tags, skip_cves = orchestrator._determine_tags([])
     assert "wordpress" in tags
     assert "nginx" in tags
 
-    # 3. Custom CLI tags
+    # 3. CVE-skip: findings with CVEs should populate skip_cves
+    from core.findings import Finding
+    cve_finding = Finding(
+        title="Log4Shell RCE",
+        description="Log4j RCE",
+        severity="CRITICAL",
+        target="https://example.com",
+        module="test",
+        evidence={},
+        remediation="Upgrade Log4j.",
+        cve="CVE-2021-44228",
+    )
+    default_context.nuclei_tags = []
+    tags, skip_cves = orchestrator._determine_tags([cve_finding])
+    assert "CVE-2021-44228" in skip_cves
+
+    # 4. Custom CLI tags
     default_context.nuclei_tags = ["cve", "xss"]
-    tags = orchestrator._determine_tags([])
+    tags, skip_cves = orchestrator._determine_tags([])
     assert tags == ["cve", "xss"]
 
-    # 4. Custom CLI "all"
+    # 5. Custom CLI "all"
     default_context.nuclei_tags = ["all"]
-    tags = orchestrator._determine_tags([])
+    tags, skip_cves = orchestrator._determine_tags([])
     assert tags == []
 
 @pytest.mark.asyncio

@@ -37,6 +37,9 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.12.0",
     "respx>=0.20.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8.0",
+    "pip-audit>=2.7.0",
 ]
 
 [project.scripts]
@@ -45,3 +48,34 @@ scopex = "scopex:cli"
 [tool.setuptools]
 packages = ["core", "scanners", "plugins", "reports", "utils"]
 py-modules = ["scopex"]
+
+# ── Ruff (linter + formatter) ────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = [
+    "E501",   # line-length enforced by formatter only
+    "E402",   # module-level import not at top of file (some scanners do lazy imports)
+    "F401",   # imported but unused (some __init__.py re-exports)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "scanners", "plugins", "reports", "utils"]
+
+# ── Mypy (static type checking) ──────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+no_implicit_optional = true
+strict_optional = true
+# Allow gradual adoption — do not enforce strict mode on the entire repo yet
+disallow_untyped_defs = false
+
+# ── Pytest ───────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

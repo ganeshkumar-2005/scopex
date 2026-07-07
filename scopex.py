@@ -86,12 +86,19 @@ def config():
 @click.option("--waf-evasion", type=click.Choice(["stealth", "aggressive", "bypass"]), help="Enable WAF evasion with selected profile.")
 @click.option("--skip-nuclei", is_flag=True, help="Skip Nuclei scan integration.")
 @click.option("--output-json", is_flag=True, help="Output results in JSON format to stdout.")
+@click.option("--output-sarif", "output_sarif", default=None, help="Write SARIF 2.1.0 output to this file path.")
 @click.option("--debug", is_flag=True, help="Enable verbose console debugging output.")
+@click.option("--verify-ssl/--no-verify-ssl", "verify_ssl", default=False,
+              help="Verify TLS certificates (default: --no-verify-ssl for pentest targets).")
+@click.option("--modules", "modules", default=None,
+              help="Comma-separated scanner/plugin keys to run, e.g. headers,ssl,sqli,plugin:ssrf. "
+                   "Overrides individual --headers, --ssl etc. flags when provided.")
 def scan(
     target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois,
     deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf,
     plugin_compliance, run_all, nuclei, nuclei_tags, nuclei_templates, force,
-    auth_user, auth_pass, auth_url, resume_checkpoint, waf_evasion, skip_nuclei, output_json, debug
+    auth_user, auth_pass, auth_url, resume_checkpoint, waf_evasion, skip_nuclei, output_json, output_sarif,
+    debug, verify_ssl, modules
 ):
     """Audits targets for configuration flaws and security vulnerabilities."""
     import asyncio
@@ -138,14 +145,28 @@ def scan(
     # Determine which scanners to run
     scanners_to_run = []
     
-    any_scanners_requested = any([
-        ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois,
-        plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance
-    ])
-
-    if run_all:
+    # --modules overrides individual boolean flags when provided
+    if modules:
+        from core.orchestrator import _SCANNER_REGISTRY
+        valid_keys = set(_SCANNER_REGISTRY.keys()) | {
+            "plugin:ssl", "plugin:services", "plugin:cms",
+            "plugin:network", "plugin:takeover", "plugin:ssrf", "plugin:compliance",
+            "plugins",
+        }
+        requested = [m.strip() for m in modules.split(",") if m.strip()]
+        unknown = [m for m in requested if m not in valid_keys]
+        if unknown:
+            console.print(
+                f"[bold red]Error:[/bold red] Unknown module(s): {', '.join(unknown)}\n"
+                f"Valid keys: {', '.join(sorted(valid_keys))}"
+            )
+            return
+        scanners_to_run = requested
+    elif run_all:
         scanners_to_run = None  # None tells orchestrator to run all
-    elif any_scanners_requested:
+    elif any([ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies,
+               waf, info, auth, api, whois, plugins, plugin_ssl, plugin_services,
+               plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance]):
         if ports: scanners_to_run.append("ports")
         if headers: scanners_to_run.append("headers")
         if ssl: scanners_to_run.append("ssl")
@@ -214,6 +235,7 @@ def scan(
         profile=profile_name,
         ports=profile.get("ports", []),
         timeout=timeout,
+        verify_ssl=verify_ssl,
         waf_evasion=waf_evasion_enabled,
         waf_evasion_profile=waf_evasion_profile,
         auth=auth_ctx,
@@ -240,6 +262,15 @@ def scan(
     
     with open(output_filename, "w", encoding="utf-8") as f:
         json.dump(result_dict, f, indent=2)
+
+    # SARIF export if requested
+    if output_sarif:
+        try:
+            from reports.sarif_report import generate_sarif_report
+            generate_sarif_report(result.all_findings, output_sarif)
+            console.print(f"[green]* SARIF report written to: [bold white]{output_sarif}[/bold white][/green]")
+        except Exception as sarif_err:
+            console.print(f"[bold red]Warning:[/bold red] SARIF export failed: {sarif_err}")
 
     # Output JSON directly if requested
     if output_json:

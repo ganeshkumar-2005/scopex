@@ -235,7 +235,7 @@ class ScanOrchestrator:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=10.0, read=ctx.timeout + 5, write=10.0, pool=5.0),
                 follow_redirects=True,
-                verify=False,  # Pentesting targets may have self-signed certs
+                verify=ctx.verify_ssl,  # Configurable: default False for pentest targets (self-signed certs)
                 http2=True,
                 headers={
                     "User-Agent": (

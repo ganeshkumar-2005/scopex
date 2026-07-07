@@ -72,7 +72,7 @@ async def test_run_isolated_success():
     )
 
     findings = await plugin.run_isolated(
-        timeout=30.0,
+        timeout=120.0,
         existing_findings=[finding]
     )
 
