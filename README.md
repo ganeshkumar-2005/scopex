@@ -48,25 +48,25 @@ Below is the real-time terminal audit view when scanning a target:
    cd scopex
    ```
 
-2. Set up virtual environment and install dependencies:
+2. Set up virtual environment and install in editable mode:
 
    **On Windows:**
    ```cmd
    python -m venv venv
    venv\Scripts\activate
-   pip install -r requirements.txt
+   pip install -e .
    ```
 
    **On macOS/Linux:**
    ```bash
    python -m venv venv
    source venv/bin/activate
-   pip install -r requirements.txt
+   pip install -e .
    ```
 
 ### Basic Scan Command
 ```bash
-python scopex.py scan --target example.com
+scopex scan --target example.com
 ```
 
 ---
