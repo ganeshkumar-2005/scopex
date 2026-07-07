@@ -1,11 +1,14 @@
 import re
 from datetime import datetime
 import urllib.parse
-import requests
-import urllib3
+import httpx
 
 # Suppress certificate verification warnings for cleaner progress/CLI output
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except ImportError:
+    pass
 
 def validate_target(target: str) -> str:
     """
@@ -81,7 +84,7 @@ def severity_icon(severity: str) -> str:
 
 def make_web_request(url: str, method: str = "GET", headers: dict = None, 
                      params: dict = None, data=None, json_data=None, timeout: float = 5.0, 
-                     allow_redirects: bool = True) -> requests.Response:
+                     allow_redirects: bool = True) -> httpx.Response:
     """Helper wrapper to execute web requests safely with standard user agent.
     
     Args:
@@ -95,18 +98,17 @@ def make_web_request(url: str, method: str = "GET", headers: dict = None,
         default_headers.update(headers)
         
     try:
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=default_headers,
-            params=params,
-            data=data if json_data is None else None,
-            json=json_data,
-            timeout=timeout,
-            allow_redirects=allow_redirects,
-            verify=False
-        )
-        return response
-    except requests.exceptions.RequestException as e:
+        with httpx.Client(verify=False, follow_redirects=allow_redirects) as client:
+            response = client.request(
+                method=method,
+                url=url,
+                headers=default_headers,
+                params=params,
+                data=data if json_data is None else None,
+                json=json_data,
+                timeout=timeout,
+            )
+            return response
+    except httpx.RequestError as e:
         # Re-raise or return None to let scanner handle network issues
         raise e
