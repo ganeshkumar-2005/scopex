@@ -2,13 +2,13 @@
 
 ![ScopeX Interactive Banner](assets/scopex_banner.png)
 
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-gold.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.0-gold.svg)](CHANGELOG.md)
 [![Vulnerability Scanner](https://img.shields.io/badge/VAPT-OWASP%20%2F%20PCI--DSS-red.svg)](#)
 [![Legal Disclaimer](https://img.shields.io/badge/legal-disclaimer-red.svg)](DISCLAIMER.md)
 
-ScopeX is an advanced, terminal-based security auditing and vulnerability scanning toolkit built entirely in pure Python. It conducts high-accuracy, full-spectrum security assessments including port scanning, SQLi, XSS, SSRF, JWT auditing, and CVE mapping, and generates compliance scores and professional PDF reports without relying on heavy external binaries like Nmap or OpenSSL.
+ScopeX v2 is a modernized, terminal-based security auditing, threat modeling, and vulnerability scanning suite. Designed with a fully asynchronous execution core, it conducts high-performance, full-spectrum security assessments including port scanning, custom signature matching, SQLi, XSS, SSRF, JWT audits, and CVE mapping, generating live visual progress bars, compliance scores, local HTML report dashboards, and professional PDF reports.
 
 > [!CAUTION]
 > **LEGAL NOTICE**: Usage of ScopeX for scanning targets without prior written authorization is strictly prohibited. Before operating, read the complete terms in [DISCLAIMER.md](DISCLAIMER.md).
@@ -19,12 +19,14 @@ Developed by **Ganesh Kumar**.
 
 ## 🔍 Features
 
-*   **14 Core Scanning Modules**: Built-in scanners for ports, headers, SSL/TLS, DNS, subdomains, WAF, cookies, API endpoints, WHOIS, and web vulnerabilities.
-*   **7 Advanced Nessus-Style Plugins**: Dynamic plugins check protocol vulnerabilities (e.g. Heartbleed CVE-2014-0160, Mysql empty pass, SMTP open relay) and server configurations.
-*   **Nuclei Integration**: Optional `--nuclei` flag to execute ProjectDiscovery's template-based Nuclei scanner in parallel, merging and deduplicating results.
-*   **Compliance & Risk Scoring Engine**: Maps findings to OWASP Top 10 and PCI-DSS requirements, calculating a letter-grade (A–F) health rating.
-*   **Professional PDF Reports**: Auto-compiles clean, executive-ready reports with color-coded severity panels, CVSS scores, and remediation steps.
-*   **Pure Python implementation**: Minimal dependencies (`requests`, `rich`, `click`, `fpdf2`, `beautifulsoup4`) running entirely in user-space.
+*   **Fully Asynchronous Core Engine**: Re-engineered execution loop running all 15 core scanners concurrently, delivering massive performance boosts.
+*   **YAML Custom Rules Engine**: Scan targets using custom signature rules loaded from the `rules/` directory (matching URL paths, HTTP status codes, header regex, and body patterns).
+*   **Subprocess-Isolated Plugins**: Runs advanced plugins (Heartbleed, Open Relay, LDAP/DB passwordless logins) in fully isolated subprocesses over secure JSON pipelines.
+*   **Glassmorphic HTML Web Dashboard**: Lightweight built-in dashboard server serving interactive charts, search, raw evidence views, and PDF download options.
+*   **Dynamic Encoding-Aware Terminal UX**: Animated progress bars that dynamically scale to scanner tasks, with smart fallbacks to ASCII spinners on legacy Windows consoles.
+*   **OpenAPI Schema discovery**: Active parsing of Swagger/OpenAPI specifications to automatically resolve endpoints and parameter structures for downstream scanning.
+*   **Nuclei Integration**: Managed parallel execution of ProjectDiscovery's Nuclei scanner with real-time result deduplication.
+*   **Compliance & Risk Scoring Engine**: Calculates letter-grade health ratings (A–F) mapped to OWASP Top 10 and PCI-DSS requirements.
 
 ---
 
@@ -311,25 +313,33 @@ ScopeX integrates seamlessly with ProjectDiscovery's **Nuclei** template-based s
 
 ## 🏛️ Project Architecture
 
-ScopeX runs concurrent checks asynchronously using Python thread pools, routing raw TCP bytes and HTTP packets direct to target servers:
+ScopeX v2 manages scanning phases concurrently using Python's async event loop engine. The structured directory tree layout is shown below:
 
 ```
 ScopeX/
-├── scopex.py              # CLI Controller (Rich + Click)
-├── config.json              # Scan Profiles & Subdomain Lists
-├── requirements.txt         # Core dependencies
-├── scanners/                # 14 Protocol-level basic/deep scanners
-│   ├── port_scanner.py      # TCP raw socket sweeps
-│   ├── sqli_scanner.py      # Error & Time-blind blind injection
-│   └── ...                  # Other scanners
-├── plugins/                 # Vulnerability exploits & compliance mapping
-│   ├── compliance.py        # OWASP/PCI mapping & grading
-│   ├── ssl_vulns.py         # Raw TLS Heartbleed prober
-│   └── ...                  # Other plugins
-├── reports/                 # PDF builder
-│   └── pdf_report.py        # FPDF2 engine
-└── utils/                   # Shared connection helpers & output colors
-    └── nuclei_integration.py # Nuclei scanner subprocess integration
+├── scopex.py                  # CLI Entrypoint (Rich UI + Click controller)
+├── pyproject.toml             # Modern packaging & package script setup
+├── Dockerfile                 # Containerized runtime configuration
+├── config.json                # Scan Profiles & default subdomains list
+├── requirements.txt           # External dependencies list
+├── core/                      # Main orchestration engine
+│   ├── orchestrator.py        # Asynchronous execution orchestrator & live progress
+│   ├── context.py             # Global execution state tracker
+│   └── findings.py            # Unified standard Finding models
+├── scanners/                  # Core protocol & vulnerability modules (15)
+│   ├── custom_rules_scanner.py # Dynamic YAML signature matching engine
+│   ├── api_scanner.py         # Rest/GraphQL & OpenAPI spec discovery
+│   └── ...                    # Other scanners
+├── plugins/                   # Subprocess-isolated security modules (7)
+│   ├── runner.py              # Subprocess execution delegator CLI
+│   └── ...                    # Isolated plugins
+├── reports/                   # Reporting outputs (PDF, JSON, Live HTML)
+│   ├── dashboard.py           # Glassmorphic local HTTP dashboard server
+│   ├── pdf_report.py          # Professional executive PDF compiler
+│   └── json_report.py         # Standardized JSON compiler
+└── utils/                     # Shared system helpers
+    ├── nuclei_orchestrator.py # Nuclei parallel orchestration
+    └── Waf_evasion.py         # Dynamic firewall evasion rules
 ```
 
 ---
