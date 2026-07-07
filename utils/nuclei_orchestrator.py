@@ -366,7 +366,7 @@ class NucleiOrchestrator:
         
         self.log.info(f"Downloading Nuclei v{version} for {os_name}_{arch_name} from: {download_url}")
         try:
-            async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
+            async with httpx.AsyncClient(verify=False, follow_redirects=True, timeout=120.0) as client:
                 resp = await client.get(download_url)
                 if resp.status_code != 200:
                     self.log.warning(f"Failed to download Nuclei archive: HTTP {resp.status_code}")
