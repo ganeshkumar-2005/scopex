@@ -57,7 +57,8 @@ async def test_get_nuclei_version_success(default_context):
 async def test_run_missing_nuclei_raises_error(default_context):
     orchestrator = NucleiOrchestrator(default_context)
 
-    with patch.object(orchestrator, "_get_nuclei_version", return_value=None):
+    with patch.object(orchestrator, "_get_nuclei_version", return_value=None), \
+         patch.object(orchestrator, "_install_nuclei", return_value=False):
         with pytest.raises(NucleiNotFoundError):
             await orchestrator.run()
 

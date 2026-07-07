@@ -21,6 +21,7 @@ from typing import Dict, List, Optional
 
 from loguru import logger
 
+import httpx
 from core.context import ScanContext
 from core.findings import Finding
 
@@ -70,7 +71,7 @@ class NucleiOrchestrator:
     ) -> List[Finding]:
         """
         Run Nuclei orchestration:
-        1. Verify Nuclei installation
+        1. Verify Nuclei installation (attempts auto-install if missing)
         2. Determine relevant tags from ScanContext
         3. Ensure templates are available
         4. Run Nuclei asynchronously
@@ -82,9 +83,14 @@ class NucleiOrchestrator:
 
         version = await self._get_nuclei_version()
         if version is None:
-            raise NucleiNotFoundError(
-                "Nuclei not found. Install from: https://github.com/projectdiscovery/nuclei/releases"
-            )
+            installed = await self._install_nuclei()
+            if installed:
+                version = await self._get_nuclei_version()
+            
+            if version is None:
+                raise NucleiNotFoundError(
+                    "Nuclei not found. Install from: https://github.com/projectdiscovery/nuclei/releases"
+                )
         self.log.info(f"Nuclei {version} found")
 
         tags = self._determine_tags(existing_findings)
@@ -305,3 +311,89 @@ class NucleiOrchestrator:
         except Exception as exc:
             self.log.debug(f"Nuclei finding conversion failed: {exc}")
             return None
+
+    async def _install_nuclei(self) -> bool:
+        """Dynamically download and unpack the latest official ProjectDiscovery Nuclei binary for this system's OS and architecture."""
+        self.log.info("Nuclei binary not found. Attempting to download and install the latest official release...")
+        import sys
+        import platform
+        import zipfile
+        import io
+        
+        # Determine OS
+        system = platform.system().lower()
+        if "windows" in system:
+            os_name = "windows"
+        elif "darwin" in system:
+            os_name = "macOS"
+        elif "linux" in system:
+            os_name = "linux"
+        else:
+            self.log.warning(f"Unsupported OS for auto-install: {system}")
+            return False
+            
+        # Determine Architecture
+        machine = platform.machine().lower()
+        if machine in ("amd64", "x86_64"):
+            arch_name = "amd64"
+        elif machine in ("arm64", "aarch64"):
+            arch_name = "arm64"
+        elif machine in ("386", "i386", "i686"):
+            arch_name = "386"
+        else:
+            self.log.warning(f"Unsupported architecture for auto-install: {machine}")
+            return False
+
+        # Get latest version from GitHub Redirect
+        version = None
+        try:
+            async with httpx.AsyncClient(follow_redirects=False) as client:
+                resp = await client.get("https://github.com/projectdiscovery/nuclei/releases/latest")
+                location = resp.headers.get("Location", "")
+                # Location will be like https://github.com/projectdiscovery/nuclei/releases/tag/v3.2.9
+                match = re.search(r"/tag/v?(\d+\.\d+\.\d+)", location)
+                if match:
+                    version = match.group(1)
+        except Exception as e:
+            self.log.debug(f"Failed to fetch latest version tag via redirect: {e}")
+            
+        if not version:
+            # Hardcoded fallback version if API redirect fails
+            version = "3.2.9"
+
+        archive_name = f"nuclei_{version}_{os_name}_{arch_name}.zip"
+        download_url = f"https://github.com/projectdiscovery/nuclei/releases/download/v{version}/{archive_name}"
+        
+        self.log.info(f"Downloading Nuclei v{version} for {os_name}_{arch_name} from: {download_url}")
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=120.0) as client:
+                resp = await client.get(download_url)
+                if resp.status_code != 200:
+                    self.log.warning(f"Failed to download Nuclei archive: HTTP {resp.status_code}")
+                    return False
+                
+                # Unpack the zip file in-memory and write binary to parent directory
+                zip_data = io.BytesIO(resp.content)
+                with zipfile.ZipFile(zip_data) as z:
+                    for filename in z.namelist():
+                        if filename in ("nuclei", "nuclei.exe"):
+                            bin_content = z.read(filename)
+                            dest_name = "nuclei.exe" if os_name == "windows" else "nuclei"
+                            dest_path = Path(__file__).parent.parent / dest_name
+                            
+                            # Write binary content
+                            with open(dest_path, "wb") as f:
+                                f.write(bin_content)
+                                
+                            # Set executable permissions on Unix-based OS
+                            if os_name != "windows":
+                                import stat
+                                current_mode = os.stat(dest_path).st_mode
+                                os.chmod(dest_path, current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                                
+                            self.log.info(f"Successfully installed Nuclei binary to: {dest_path}")
+                            return True
+        except Exception as exc:
+            self.log.warning(f"Failed to download and unpack Nuclei binary: {exc}")
+            
+        return False
