@@ -7,6 +7,8 @@ class SubdomainTakeoverPlugin(BasePlugin):
     PLUGIN_NAME = "Subdomain Takeover Scanner"
     PLUGIN_FAMILY = "DNS Security"
     PLUGIN_VERSION = "1.0"
+    PLUGIN_SHORT_KEY = "takeover"
+    DESCRIPTION = "Dangling CNAME, cloud provider takeover detection"
 
     def __init__(self, target: str, timeout: float = 5.0, discovered_subdomains: list = None):
         super().__init__(target, timeout)

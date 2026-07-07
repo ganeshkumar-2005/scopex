@@ -8,6 +8,8 @@ class NetworkVulnPlugin(BasePlugin):
     PLUGIN_NAME = "Network Vulnerability Scanner"
     PLUGIN_FAMILY = "Network"
     PLUGIN_VERSION = "1.1"
+    PLUGIN_SHORT_KEY = "network"
+    DESCRIPTION = "DNS zone transfer, SNMP community, SMB signing checks"
 
     def run(self, progress_callback=None) -> dict:
         """Runs network-level vulnerability checks."""

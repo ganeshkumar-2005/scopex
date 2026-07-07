@@ -61,3 +61,8 @@ output/*
 
 # Asciinema GIF Generator binary
 agg.exe
+nuclei.exe
+
+# Local scan logs & scratch scripts
+logs/
+scratch/

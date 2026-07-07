@@ -1,0 +1,13 @@
+id: admin_panel
+title: Exposed Administrator Panel
+severity: MEDIUM
+description: An administrator login panel was detected at a common path. While not directly vulnerable, exposed admin consoles invite brute-force attacks and credential stuffing.
+remediation: Restrict login panels to specific internal IP ranges or configure multi-factor authentication (MFA).
+match:
+  paths:
+    - "/admin/login.php"
+    - "/wp-admin"
+  status: 200
+  body:
+    - "admin"
+    - "password"

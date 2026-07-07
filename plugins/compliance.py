@@ -5,10 +5,16 @@ class CompliancePlugin(BasePlugin):
     PLUGIN_NAME = "Compliance & Scoring Engine"
     PLUGIN_FAMILY = "Compliance"
     PLUGIN_VERSION = "1.0"
+    PLUGIN_SHORT_KEY = "compliance"
+    DESCRIPTION = "OWASP Top 10 mapping, PCI-DSS checks, A-F security grading"
 
     def __init__(self, target: str, timeout: float = 5.0, existing_findings: list = None):
         super().__init__(target, timeout)
-        self.existing_findings = existing_findings or []
+        raw_findings = existing_findings or []
+        self.existing_findings = [
+            f.to_dict() if hasattr(f, "to_dict") else f
+            for f in raw_findings
+        ]
 
     def run(self, progress_callback=None) -> dict:
         """Process findings, map to compliance controls, and grade security posture."""

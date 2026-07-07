@@ -1,26 +1,30 @@
 """
-ScopeX WHOIS Scanner Module
+ScopeX WHOIS Scanner Module (v2 — async BaseScanner architecture)
 Performs WHOIS lookups on target domains to extract registration details,
 registrar info, expiration dates, and nameserver configurations.
-Uses raw socket connections to WHOIS servers (port 43) - no external dependencies.
+Uses raw socket connections to WHOIS servers (port 43) — no external dependencies.
 """
-import socket
+from __future__ import annotations
+
+import asyncio
 import re
-from datetime import datetime
+import socket
+from datetime import datetime, timezone
+from typing import Any, Dict, List
+
+import httpx
+
+from core.context import ScanContext
+from core.findings import Finding
+from scanners.base_scanner import BaseScanner
 
 
-class WhoisScanner:
-    def __init__(self, target: str, timeout: float = 5.0):
-        self.target = target
-        # Extract clean domain from URL if needed
-        if "://" in target:
-            self.host = target.split("://")[1].split("/")[0].split(":")[0]
-        else:
-            self.host = target.split("/")[0].split(":")[0]
-        self.timeout = timeout
+class WhoisScanner(BaseScanner):
+    def __init__(self, context: ScanContext, client: httpx.AsyncClient) -> None:
+        super().__init__(context, client)
 
         # Top-level WHOIS servers for common TLDs
-        self.tld_whois_servers = {
+        self.tld_whois_servers: Dict[str, str] = {
             "com": "whois.verisign-grs.com",
             "net": "whois.verisign-grs.com",
             "org": "whois.pir.org",
@@ -45,6 +49,10 @@ class WhoisScanner:
             "tech": "whois.nic.tech",
         }
 
+    # ------------------------------------------------------------------
+    # WHOIS server selection
+    # ------------------------------------------------------------------
+
     def _get_whois_server(self) -> str:
         """Determines the appropriate WHOIS server for the target domain's TLD."""
         parts = self.host.split(".")
@@ -66,6 +74,10 @@ class WhoisScanner:
         # Fallback to IANA WHOIS
         return "whois.iana.org"
 
+    # ------------------------------------------------------------------
+    # Raw WHOIS query (blocking — run via executor)
+    # ------------------------------------------------------------------
+
     def _query_whois(self, server: str, domain: str) -> str:
         """Sends a raw WHOIS query to the specified server on port 43."""
         try:
@@ -81,9 +93,13 @@ class WhoisScanner:
         except Exception:
             return ""
 
-    def _parse_whois(self, raw: str) -> dict:
+    # ------------------------------------------------------------------
+    # WHOIS response parser
+    # ------------------------------------------------------------------
+
+    def _parse_whois(self, raw: str) -> Dict[str, Any]:
         """Parses raw WHOIS text output into structured key-value pairs."""
-        info = {
+        info: Dict[str, Any] = {
             "registrar": "",
             "registrant_org": "",
             "registrant_country": "",
@@ -96,7 +112,7 @@ class WhoisScanner:
         }
 
         # Common WHOIS field patterns (case-insensitive)
-        patterns = {
+        patterns: Dict[str, List[str]] = {
             "registrar": [
                 r"Registrar:\s*(.+)",
                 r"Sponsoring Registrar:\s*(.+)",
@@ -135,11 +151,11 @@ class WhoisScanner:
             ],
         }
 
-        for field, regexes in patterns.items():
+        for field_name, regexes in patterns.items():
             for regex in regexes:
                 match = re.search(regex, raw, re.IGNORECASE)
                 if match:
-                    info[field] = match.group(1).strip()
+                    info[field_name] = match.group(1).strip()
                     break
 
         # Extract nameservers
@@ -165,20 +181,24 @@ class WhoisScanner:
 
         return info
 
-    def scan(self, progress_callback=None) -> dict:
+    # ------------------------------------------------------------------
+    # Main scan entry point
+    # ------------------------------------------------------------------
+
+    async def scan(self) -> List[Finding]:
         """Performs the WHOIS lookup and generates findings."""
-        findings = []
+        findings: List[Finding] = []
+        loop = asyncio.get_running_loop()
 
         # Step 1: Query the primary WHOIS server
         whois_server = self._get_whois_server()
-        raw_whois = self._query_whois(whois_server, self.host)
+        raw_whois: str = await loop.run_in_executor(
+            None, self._query_whois, whois_server, self.host
+        )
 
         if not raw_whois:
-            return {
-                "domain": self.host,
-                "error": f"Could not connect to WHOIS server: {whois_server}",
-                "findings": [],
-            }
+            self.log.warning(f"Could not connect to WHOIS server: {whois_server}")
+            return findings
 
         # Step 2: Parse the initial response
         whois_info = self._parse_whois(raw_whois)
@@ -186,13 +206,12 @@ class WhoisScanner:
         # Step 3: Follow referral if a more specific WHOIS server is indicated
         if whois_info.get("_refer"):
             refer_server = whois_info["_refer"]
-            referred_raw = self._query_whois(refer_server, self.host)
+            referred_raw: str = await loop.run_in_executor(
+                None, self._query_whois, refer_server, self.host
+            )
             if referred_raw:
                 raw_whois = referred_raw
                 whois_info = self._parse_whois(referred_raw)
-
-        if progress_callback:
-            progress_callback(1, 1)
 
         # --- Generate Findings ---
 
@@ -204,25 +223,27 @@ class WhoisScanner:
         expires = whois_info.get("expiration_date") or "Unknown"
         nameservers = whois_info.get("nameservers", [])
 
-        evidence_lines = [
-            f"Domain: {self.host}",
-            f"Registrar: {registrar}",
-            f"Organization: {org}",
-            f"Country: {country}",
-            f"Created: {created}",
-            f"Expires: {expires}",
-            f"Nameservers: {', '.join(nameservers) if nameservers else 'N/A'}",
-        ]
-
-        findings.append({
-            "module": "WHOIS Scanner",
-            "target": self.host,
-            "severity": "INFO",
-            "title": "WHOIS Registration Details",
-            "description": f"Domain registration information for {self.host}. Includes registrar, dates, and nameserver assignments.",
-            "evidence": "\n".join(evidence_lines),
-            "remediation": "Enable WHOIS privacy protection to prevent PII exposure if registrant details are publicly visible.",
-        })
+        findings.append(self.finding(
+            title="WHOIS Registration Details",
+            severity="INFO",
+            description=(
+                f"Domain registration information for {self.host}. "
+                f"Includes registrar, dates, and nameserver assignments."
+            ),
+            evidence={
+                "domain": self.host,
+                "registrar": registrar,
+                "organization": org,
+                "country": country,
+                "created": created,
+                "expires": expires,
+                "nameservers": nameservers,
+            },
+            remediation=(
+                "Enable WHOIS privacy protection to prevent PII exposure "
+                "if registrant details are publicly visible."
+            ),
+        ))
 
         # 2. Check for expiring domain (within 30 days)
         if expires and expires != "Unknown":
@@ -237,61 +258,92 @@ class WhoisScanner:
                         continue
 
                 if exp_date:
-                    days_left = (exp_date - datetime.now()).days
+                    # Make the parsed date timezone-aware for proper comparison
+                    exp_date_utc = exp_date.replace(tzinfo=timezone.utc)
+                    days_left = (exp_date_utc - datetime.now(timezone.utc)).days
                     if days_left < 0:
-                        findings.append({
-                            "module": "WHOIS Scanner",
-                            "target": self.host,
-                            "severity": "CRITICAL",
-                            "title": "Domain Registration Expired",
-                            "description": f"The domain {self.host} appears to have expired {abs(days_left)} days ago. Expired domains are vulnerable to takeover by third parties.",
-                            "evidence": f"Expiration date: {expires}",
-                            "remediation": "Renew the domain immediately or enable auto-renewal with your registrar.",
-                        })
+                        findings.append(self.finding(
+                            title="Domain Registration Expired",
+                            severity="CRITICAL",
+                            description=(
+                                f"The domain {self.host} appears to have expired "
+                                f"{abs(days_left)} days ago. Expired domains are "
+                                f"vulnerable to takeover by third parties."
+                            ),
+                            evidence={
+                                "registrar": registrar,
+                                "expiration_date": expires,
+                                "days_expired": abs(days_left),
+                            },
+                            remediation=(
+                                "Renew the domain immediately or enable auto-renewal "
+                                "with your registrar."
+                            ),
+                        ))
                     elif days_left <= 30:
-                        findings.append({
-                            "module": "WHOIS Scanner",
-                            "target": self.host,
-                            "severity": "HIGH",
-                            "title": "Domain Expiring Soon",
-                            "description": f"The domain {self.host} expires in {days_left} day(s). Losing control of a domain can cause service disruption and enable phishing.",
-                            "evidence": f"Expiration date: {expires} ({days_left} days remaining)",
-                            "remediation": "Renew the domain immediately and enable auto-renewal.",
-                        })
+                        findings.append(self.finding(
+                            title="Domain Expiring Soon",
+                            severity="HIGH",
+                            description=(
+                                f"The domain {self.host} expires in {days_left} day(s). "
+                                f"Losing control of a domain can cause service disruption "
+                                f"and enable phishing."
+                            ),
+                            evidence={
+                                "registrar": registrar,
+                                "expiration_date": expires,
+                                "days_remaining": days_left,
+                            },
+                            remediation=(
+                                "Renew the domain immediately and enable auto-renewal."
+                            ),
+                        ))
             except Exception:
                 pass
 
         # 3. Check for DNSSEC status
         dnssec = whois_info.get("dnssec", "").lower()
         if dnssec and "unsigned" in dnssec:
-            findings.append({
-                "module": "WHOIS Scanner",
-                "target": self.host,
-                "severity": "MEDIUM",
-                "title": "DNSSEC Not Enabled",
-                "description": "DNSSEC is not configured for this domain. Without DNSSEC, DNS responses can be spoofed by attackers (DNS cache poisoning).",
-                "evidence": f"DNSSEC status: {whois_info.get('dnssec', 'unsigned')}",
-                "remediation": "Enable DNSSEC signing with your DNS provider and registrar.",
-            })
+            findings.append(self.finding(
+                title="DNSSEC Not Enabled",
+                severity="MEDIUM",
+                description=(
+                    "DNSSEC is not configured for this domain. Without DNSSEC, "
+                    "DNS responses can be spoofed by attackers (DNS cache poisoning)."
+                ),
+                evidence={
+                    "dnssec_status": whois_info.get("dnssec", "unsigned"),
+                    "domain": self.host,
+                },
+                remediation=(
+                    "Enable DNSSEC signing with your DNS provider and registrar."
+                ),
+            ))
 
         # 4. Check for exposed registrant information (privacy not enabled)
-        if org and org.lower() not in ("redacted", "redacted / not disclosed", "not disclosed", "data protected", ""):
-            findings.append({
-                "module": "WHOIS Scanner",
-                "target": self.host,
-                "severity": "LOW",
-                "title": "WHOIS Registrant Information Publicly Exposed",
-                "description": f"The domain registrant organization ({org}) is publicly visible in WHOIS records. This can be used for social engineering and targeted phishing.",
-                "evidence": f"Registrant Organization: {org}\nRegistrant Country: {country}",
-                "remediation": "Enable WHOIS privacy protection (domain privacy) through your registrar.",
-            })
+        if org and org.lower() not in (
+            "redacted", "redacted / not disclosed", "not disclosed",
+            "data protected", ""
+        ):
+            findings.append(self.finding(
+                title="WHOIS Registrant Information Publicly Exposed",
+                severity="LOW",
+                description=(
+                    f"The domain registrant organization ({org}) is publicly visible "
+                    f"in WHOIS records. This can be used for social engineering and "
+                    f"targeted phishing."
+                ),
+                evidence={
+                    "registrant_organization": org,
+                    "registrant_country": country,
+                    "domain": self.host,
+                },
+                remediation=(
+                    "Enable WHOIS privacy protection (domain privacy) through "
+                    "your registrar."
+                ),
+            ))
 
-        return {
-            "domain": self.host,
-            "whois_server": whois_server,
-            "raw_length": len(raw_whois),
-            "info": whois_info,
-            "findings": findings,
-        }
+        self.log.info(f"WHOIS scan complete for {self.host}: {len(findings)} findings")
 
-Class = WhoisScanner
+        return findings

@@ -1,0 +1,14 @@
+{
+  "integration_targets": [
+    {
+      "name": "Local Juice Shop Mock",
+      "url": "http://localhost:3000",
+      "host": "localhost"
+    },
+    {
+      "name": "Vulnweb Test PHP",
+      "url": "http://testphp.vulnweb.com",
+      "host": "testphp.vulnweb.com"
+    }
+  ]
+}

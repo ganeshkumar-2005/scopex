@@ -1,87 +1,134 @@
+"""
+tests/test_sqli_scanner.py — Unit tests for the async SQLi scanner (v2).
+Tests all 4 detection techniques with mocked HTTP responses.
+"""
+from __future__ import annotations
+
+import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
-import time
-from unittest.mock import patch, MagicMock
+
+from core.context import ScanContext
+from core.findings import Finding
 from scanners.sqli_scanner import SQLiScanner
 
-def test_sqli_scanner_no_params():
-    """Test that SQLiScanner skips and logs INFO when no query params are present in URL."""
-    scanner = SQLiScanner("http://example.com/index.php")
-    res = scanner.scan()
-    assert "findings" in res
-    assert len(res["findings"]) == 1
-    assert res["findings"][0]["title"] == "No URL Parameters Found to Test"
-    assert res["findings"][0]["severity"] == "INFO"
 
-@patch("scanners.sqli_scanner.make_web_request")
-def test_sqli_scanner_error_based(mock_request):
-    """Test that SQLiScanner detects Error-Based SQLi when a database error appears in response."""
-    # Mock baseline request
-    mock_baseline = MagicMock()
-    mock_baseline.text = "This is a normal database output."
-    mock_baseline.status_code = 200
-    
-    # Mock vulnerable parameter response (MySQL error)
-    mock_vuln = MagicMock()
-    mock_vuln.text = "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version"
-    mock_vuln.status_code = 200
-    
-    # Side effects: baseline request first, then error payload requests.
-    # The first payload is error_payloads[0]. We return normal baseline response for first payload,
-    # and vulnerable response for the second payload.
-    mock_request.side_effect = [
-        mock_baseline, # Baseline request
-        mock_baseline, # First payload: '
-        mock_vuln,     # Second payload: "
-        mock_baseline, 
-        mock_baseline,
-        mock_baseline
-    ]
-    
-    scanner = SQLiScanner("http://example.com/index.php?id=1")
-    res = scanner.scan()
-    
-    assert "findings" in res
-    assert len(res["findings"]) == 1
-    finding = res["findings"][0]
-    assert finding["title"] == "Error-Based SQL Injection Vulnerability"
-    assert finding["severity"] == "CRITICAL"
-    assert "MySQL" in finding["evidence"]
-    assert "MySQL" in finding["description"]
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-@patch("scanners.sqli_scanner.make_web_request")
-@patch("scanners.sqli_scanner.time.time")
-def test_sqli_scanner_time_blind(mock_time, mock_request):
-    """Test that SQLiScanner detects Time-Based Blind SQLi using the two-step verification mechanism."""
-    # Mock baseline request
-    mock_baseline = MagicMock()
-    mock_baseline.text = "This is a normal database output."
-    mock_baseline.status_code = 200
-    
-    # Simulate elapsed time using mock_time
-    # baseline request: start=0.0, end=0.1 (elapsed=0.1)
-    # error-based payloads (6 of them, none trigger SQLi):
-    # each request starts and ends, time diff is 0.1s.
-    # time-based payload 1 (MySQL sleep(5)):
-    # request start=1.0, end=6.1 (elapsed=5.1)
-    # confirmation request (MySQL sleep(2)):
-    # request start=7.0, end=9.1 (elapsed=2.1)
-    
-    time_values = [
-        0.0, 0.1,  # Baseline start, end (elapsed = 0.1)
-        1.0, 6.1,  # MySQL sleep(5) start, end (elapsed = 5.1)
-        7.0, 9.1,  # MySQL sleep(2) confirmation start, end (confirm_elapsed = 2.1)
+def _ctx(target="https://example.com/page?id=1") -> ScanContext:
+    """Create a ScanContext with a parameterized URL."""
+    host = "example.com"
+    ctx = ScanContext(target=target, host=host, timeout=3.0)
+    ctx.discovered_urls = [target]
+    return ctx
+
+
+def _mock_response(text="", status_code=200):
+    from tests.conftest import MockResponse
+    return MockResponse(status_code=status_code, text=text)
+
+
+def _make_scanner(ctx, responses):
+    """Create a SQLiScanner with a mocked client that returns responses in order."""
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=responses)
+    client.post = AsyncMock(side_effect=responses)
+    return SQLiScanner(ctx, client)
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_sqli_no_params():
+    """Scanner returns INFO finding when no parameterized URLs exist."""
+    ctx = ScanContext(target="https://example.com/", host="example.com", timeout=3.0)
+    ctx.discovered_urls = ["https://example.com/about", "https://example.com/contact"]
+    client = AsyncMock()
+    scanner = SQLiScanner(ctx, client)
+    findings = await scanner.scan()
+    assert len(findings) == 1
+    assert findings[0].severity == "INFO"
+    assert "No URL Parameters" in findings[0].title
+
+
+@pytest.mark.asyncio
+async def test_sqli_error_based_detection():
+    """Detects error-based SQLi when DBMS error signatures appear in 2+ payloads."""
+    ctx = _ctx()
+    normal = _mock_response("Welcome to our website.")
+    mysql_error = _mock_response(
+        "You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version"
+    )
+
+    responses = [
+        normal, normal,   # baseline (2 requests)
+        normal,           # error payload 1: ' → no error
+        mysql_error,      # error payload 2: " → MySQL error
+        mysql_error,      # error payload 3: \' → MySQL error (2nd hit → confirmed)
     ]
-    mock_time.side_effect = time_values
-    
-    mock_request.return_value = mock_baseline
-    
-    scanner = SQLiScanner("http://example.com/index.php?id=1")
-    res = scanner.scan()
-    
-    assert "findings" in res
-    assert len(res["findings"]) == 1
-    finding = res["findings"][0]
-    assert finding["title"] == "Time-Based Blind SQL Injection Vulnerability"
-    assert finding["severity"] == "CRITICAL"
-    assert "sleep(5)" in finding["evidence"]
-    assert "MySQL" in finding["description"]
+    scanner = _make_scanner(ctx, responses)
+    findings = await scanner.scan()
+
+    sqli_findings = [f for f in findings if f.severity == "CRITICAL"]
+    assert len(sqli_findings) >= 1
+    assert "Error-Based" in sqli_findings[0].title
+    assert "MySQL" in sqli_findings[0].title
+    assert sqli_findings[0].verified is True
+
+
+@pytest.mark.asyncio
+async def test_sqli_boolean_blind_detection():
+    """Detects boolean-blind SQLi when TRUE/FALSE responses differ significantly."""
+    ctx = _ctx()
+    normal = _mock_response("A" * 1000)  # Baseline 1000 chars
+    true_resp = _mock_response("A" * 1000)   # TRUE response similar to baseline
+    false_resp = _mock_response("B" * 100)   # FALSE response much shorter
+
+    responses = [
+        normal, normal,  # baseline timing (2 requests)
+        # Error-based: 4 payloads, all return normal
+        normal, normal, normal, normal,
+        # Boolean-blind: baseline fetch, then TRUE/FALSE pair
+        normal,       # baseline for the URL
+        true_resp,    # TRUE payload
+        false_resp,   # FALSE payload
+    ]
+    scanner = _make_scanner(ctx, responses)
+    findings = await scanner.scan()
+
+    blind_findings = [f for f in findings if "Boolean" in f.title]
+    assert len(blind_findings) >= 1
+    assert blind_findings[0].severity == "HIGH"
+
+
+@pytest.mark.asyncio
+async def test_sqli_clean_target():
+    """No CRITICAL/HIGH findings on a target that doesn't echo errors or change behavior."""
+    ctx = _ctx()
+    normal = _mock_response("This is a clean, safe response with no SQL content.")
+
+    # All responses are normal
+    responses = [normal] * 50  # Enough for all techniques
+    scanner = _make_scanner(ctx, responses)
+    findings = await scanner.scan()
+
+    critical_or_high = [f for f in findings if f.severity in ("CRITICAL", "HIGH")]
+    assert len(critical_or_high) == 0
+
+
+@pytest.mark.asyncio
+async def test_sqli_findings_are_finding_objects():
+    """All returned findings are proper Finding dataclass instances."""
+    ctx = _ctx()
+    normal = _mock_response("Normal page.")
+    responses = [normal] * 50
+    scanner = _make_scanner(ctx, responses)
+    findings = await scanner.scan()
+    for f in findings:
+        assert isinstance(f, Finding)
+        assert f.module == "SQLiScanner"

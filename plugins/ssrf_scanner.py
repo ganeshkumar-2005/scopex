@@ -7,6 +7,8 @@ class SSRFPlugin(BasePlugin):
     PLUGIN_NAME = "SSRF & Path Traversal Scanner"
     PLUGIN_FAMILY = "Web Application"
     PLUGIN_VERSION = "1.0"
+    PLUGIN_SHORT_KEY = "ssrf"
+    DESCRIPTION = "SSRF, LFI/RFI, path traversal, null byte injection"
     
     def __init__(self, target, timeout=5.0, discovered_urls=None, **kwargs):
         super().__init__(target, timeout=timeout, **kwargs)

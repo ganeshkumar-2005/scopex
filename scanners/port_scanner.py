@@ -1,151 +1,211 @@
-import socket
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
+"""
+scanners/port_scanner.py — Port scanner (v2 async rewrite).
+Uses native Nmap via python-nmap with async executor, falling back
+to async TCP socket sweep if Nmap is not installed or errors.
+"""
+from __future__ import annotations
 
-class PortScanner:
-    def __init__(self, target: str, ports: list = None, timeout: float = 2.0):
-        # Extract host or IP
-        self.target = target
-        if "://" in target:
-            self.target = target.split("://")[1].split("/")[0].split(":")[0]
-        else:
-            self.target = target.split("/")[0].split(":")[0]
-            
-        # Expanded default port list: 50+ common ports covering services like
-        # FTP, SSH, HTTP(S), databases, message queues, admin panels, caches,
-        # container orchestration, and Hadoop/Elasticsearch clusters.
-        self.ports = ports or [
-            21, 22, 23, 25, 53, 80, 110, 111, 135, 139,
-            143, 443, 445, 993, 995, 1433, 1521, 1723, 2049, 3306,
-            3389, 4443, 4444, 5432, 5672, 5900, 5985, 6379, 6443, 8000,
-            8001, 8008, 8080, 8081, 8082, 8443, 8880, 8888, 9000, 9090,
-            9200, 9300, 9443, 10250, 11211, 15672, 27017, 27018, 50000,
-            50070, 50075
-        ]
-        self.timeout = timeout
-        self.common_services = {
-            21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
-            80: "HTTP", 110: "POP3", 111: "RPCBind", 135: "MSRPC",
-            139: "NetBIOS", 143: "IMAP", 443: "HTTPS", 445: "Microsoft-DS",
-            993: "IMAPS", 995: "POP3S", 1433: "MSSQL", 1521: "Oracle",
-            1723: "PPTP", 2049: "NFS", 3306: "MySQL", 3389: "RDP",
-            4443: "HTTPS-Alt", 4444: "Metasploit/Custom",
-            5432: "PostgreSQL", 5672: "RabbitMQ-AMQP",
-            5900: "VNC", 5985: "WinRM",
-            6379: "Redis", 6443: "Kubernetes-API",
-            8000: "HTTP-Alt", 8001: "HTTP-Alt", 8008: "HTTP-Alt",
-            8080: "HTTP-Proxy", 8081: "HTTP-Alt", 8082: "HTTP-Alt",
-            8443: "HTTPS-Alt", 8880: "HTTP-Alt", 8888: "HTTP-Alt",
-            9000: "SonarQube/PHP-FPM", 9090: "Prometheus/Cockpit",
-            9200: "Elasticsearch", 9300: "Elasticsearch-Transport",
-            9443: "HTTPS-Alt", 10250: "Kubelet",
-            11211: "Memcached", 15672: "RabbitMQ-Mgmt",
-            27017: "MongoDB", 27018: "MongoDB-Shard",
-            50000: "SAP/Jenkins-Agent", 50070: "Hadoop-NameNode",
-            50075: "Hadoop-DataNode"
-        }
+import asyncio
+from typing import Dict, List, Optional
 
-    def _grab_banner(self, sock: socket.socket) -> str:
-        """Attempts basic banner grabbing from open socket."""
-        try:
-            # Send a basic probe if needed, or just read
-            sock.settimeout(1.5)
-            # Many protocols (SSH, FTP, SMTP) send banner immediately on connect
-            banner = sock.recv(1024).decode('utf-8', errors='ignore').strip()
-            if banner:
-                return banner
-            # Try HTTP probe — use actual target hostname, not localhost
-            sock.sendall(f"GET / HTTP/1.1\r\nHost: {self.target}\r\n\r\n".encode('utf-8'))
-            banner = sock.recv(1024).decode('utf-8', errors='ignore').strip()
-            if "Server:" in banner:
-                for line in banner.split("\r\n"):
-                    if line.startswith("Server:"):
-                        return line
-            return ""
-        except Exception:
-            return ""
+from loguru import logger
 
-    def _scan_port(self, port: int) -> dict:
-        """Scans a single port and returns status."""
-        result = {
-            "port": port,
-            "status": "closed",
-            "service": self.common_services.get(port, "Unknown"),
-            "banner": "",
-            "severity": "INFO"
-        }
-        
-        try:
-            # Determine IP family
-            addr_info = socket.getaddrinfo(self.target, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
-            for family, socktype, proto, canonname, sockaddr in addr_info:
-                sock = socket.socket(family, socktype, proto)
-                sock.settimeout(self.timeout)
-                conn = sock.connect_ex(sockaddr)
-                if conn == 0:
-                    result["status"] = "open"
-                    result["banner"] = self._grab_banner(sock)
-                    # Evaluate risk based on open critical ports
-                    if port in [21, 23]: # FTP, Telnet cleartext
-                        result["severity"] = "HIGH"
-                    elif port in [22, 135, 139, 445, 1433, 3306, 3389]: # Remote administration/DBs
-                        result["severity"] = "MEDIUM"
-                    elif port in [80, 443]:
-                        result["severity"] = "INFO"
-                    else:
-                        result["severity"] = "LOW"
-                    sock.close()
-                    break
-                sock.close()
-        except Exception:
-            pass
-            
-        return result
+from core.context import ScanContext
+from core.findings import Finding
+from scanners.base_scanner import BaseScanner
 
-    def scan(self, progress_callback=None) -> dict:
-        """Concurrently scans target ports."""
+# Fallback service registry if Nmap is not used
+COMMON_SERVICES: Dict[int, str] = {
+    21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS",
+    80: "HTTP", 110: "POP3", 111: "RPCBind", 135: "MSRPC",
+    139: "NetBIOS", 143: "IMAP", 443: "HTTPS", 445: "Microsoft-DS",
+    993: "IMAPS", 995: "POP3S", 1433: "MSSQL", 1521: "Oracle",
+    1723: "PPTP", 2049: "NFS", 3306: "MySQL", 3389: "RDP",
+    4443: "HTTPS-Alt", 5432: "PostgreSQL", 5672: "RabbitMQ",
+    5900: "VNC", 5985: "WinRM", 6379: "Redis", 6443: "K8s-API",
+    8000: "HTTP-Alt", 8080: "HTTP-Proxy", 8443: "HTTPS-Alt",
+    9000: "SonarQube", 9090: "Prometheus", 9200: "Elasticsearch",
+    11211: "Memcached", 15672: "RabbitMQ-Mgmt",
+    27017: "MongoDB", 50000: "SAP/Jenkins",
+}
+
+try:
+    import nmap
+    _NMAP_AVAILABLE = True
+except ImportError:
+    _NMAP_AVAILABLE = False
+
+
+class PortScanner(BaseScanner):
+    """Hybrid port scanner utilizing Nmap with an async socket fallback."""
+
+    async def scan(self) -> List[Finding]:
+        host = self.ctx.host
+        ports = self.ctx.ports or list(COMMON_SERVICES.keys())
+        findings: List[Finding] = []
+
+        self.log.info(f"Initiating port scan for {host} (Nmap={_NMAP_AVAILABLE})")
+
         open_ports = []
-        closed_count = 0
-        total_ports = len(self.ports)
-        
-        start_time = time.time()
-        
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            futures = {executor.submit(self._scan_port, port): port for port in self.ports}
-            
-            for index, future in enumerate(as_completed(futures)):
-                res = future.result()
-                if res["status"] == "open":
-                    open_ports.append(res)
-                else:
-                    closed_count += 1
-                
-                if progress_callback:
-                    progress_callback(index + 1, total_ports)
-                    
-        elapsed = time.time() - start_time
-        
+        nmap_success = False
+
+        if _NMAP_AVAILABLE:
+            try:
+                open_ports = await self._scan_with_nmap(host, ports)
+                nmap_success = True
+            except Exception as exc:
+                self.log.warning(f"Nmap scan failed ({exc}); falling back to socket scan")
+
+        if not nmap_success:
+            open_ports = await self._scan_with_sockets(host, ports)
+
         # Sort by port number
         open_ports.sort(key=lambda x: x["port"])
-        
-        # Formulate findings
-        findings = []
+
         for p in open_ports:
-            findings.append({
-                "module": "Port Scanner",
-                "target": f"{self.target}:{p['port']}",
-                "severity": p["severity"],
-                "title": f"Open Port Detected ({p['port']}/{p['service']})",
-                "description": f"Port {p['port']} running {p['service']} is open on the target host.",
-                "evidence": f"Service: {p['service']}\nBanner: {p['banner'] or 'None captured'}",
-                "remediation": f"Ensure this port is firewalled and not exposed to the public internet unless required. "
-                               f"If running, ensure it uses secure credentials and up-to-date software versions."
-            })
+            port = p["port"]
+            service = p["service"]
+            version = p.get("version", "")
+            banner = p.get("banner", "")
+            os_match = p.get("os", "")
+            self.ctx.add_open_port(port)
+
+            # Determine severity based on port type and protocol security
+            if port in (21, 23):  # Plaintext admin protocols
+                severity = "HIGH"
+                desc = f"Port {port} ({service}) is open and transmits data in plaintext."
+            elif port in (22, 135, 139, 445, 1433, 3306, 3389, 5432, 6379, 27017):
+                severity = "MEDIUM"
+                desc = f"Port {port} ({service}) is open, exposing a potential administrative or database service."
+            elif port in (80, 443):
+                severity = "INFO"
+                desc = f"Port {port} ({service}) is open for standard web traffic."
+            else:
+                severity = "LOW"
+                desc = f"Port {port} ({service}) is open."
+
+            evidence = {
+                "port": port,
+                "service": service,
+                "host": host,
+            }
+            if version:
+                evidence["version"] = version
+                desc += f" Detected version: {version}."
+            if banner:
+                evidence["banner"] = banner
+            if os_match:
+                evidence["os_detection"] = os_match
+
+            remediation = (
+                f"Ensure port {port} ({service}) is firewalled and not publicly exposed unless required. "
+                "Keep the service updated and enforce strong authentication."
+            )
+
+            findings.append(self.finding(
+                title=f"Open Port: {port}/{service}",
+                severity=severity,
+                description=desc,
+                evidence=evidence,
+                remediation=remediation,
+                target=f"{host}:{port}",
+                tags=["port-scan", service.lower()],
+            ))
+
+        self.log.info(f"Port scan completed. Discovered {len(open_ports)} open ports.")
+        return findings
+
+    async def _scan_with_nmap(self, host: str, ports: List[int]) -> List[dict]:
+        """Run Nmap in a background thread executor."""
+        ports_str = ",".join(str(p) for p in ports)
+        loop = asyncio.get_running_loop()
+
+        def _run():
+            nm = nmap.PortScanner()
+            # Try running with OS detection first
+            try:
+                return nm.scan(host, ports_str, arguments="-sT -sV -O")
+            except Exception:
+                # Fallback to no OS detection (e.g. if running without root/admin privileges)
+                return nm.scan(host, ports_str, arguments="-sT -sV")
+
+        scan_result = await loop.run_in_executor(None, _run)
+        open_ports = []
+
+        if host in scan_result.get("scan", {}):
+            host_data = scan_result["scan"][host]
             
-        return {
-            "elapsed_seconds": elapsed,
-            "open_ports": open_ports,
-            "closed_ports_count": closed_count,
-            "findings": findings
-        }
-Class = PortScanner
+            # Extract OS details if available
+            os_match = ""
+            if "osmatch" in host_data and host_data["osmatch"]:
+                os_match = host_data["osmatch"][0].get("name", "")
+
+            if "tcp" in host_data:
+                for port, port_info in host_data["tcp"].items():
+                    if port_info.get("state") == "open":
+                        service_name = port_info.get("name", COMMON_SERVICES.get(port, "Unknown"))
+                        product = port_info.get("product", "")
+                        version = port_info.get("version", "")
+                        
+                        full_version = f"{product} {version}".strip()
+                        open_ports.append({
+                            "port": port,
+                            "service": service_name,
+                            "version": full_version,
+                            "os": os_match,
+                            "banner": port_info.get("extrainfo", ""),
+                        })
+
+        return open_ports
+
+    async def _scan_with_sockets(self, host: str, ports: List[int]) -> List[dict]:
+        """Fall back to async socket sweeps if Nmap is missing or errors."""
+        semaphore = asyncio.Semaphore(50)
+        tasks = [self._scan_port_socket(host, port, semaphore) for port in ports]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        open_ports = []
+        for res in results:
+            if isinstance(res, dict) and res.get("open"):
+                open_ports.append(res)
+        return open_ports
+
+    async def _scan_port_socket(self, host: str, port: int, semaphore: asyncio.Semaphore) -> dict:
+        """Attempt socket TCP handshake for fallback scanning."""
+        service = COMMON_SERVICES.get(port, "Unknown")
+        async with semaphore:
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port),
+                    timeout=self.ctx.timeout,
+                )
+                banner = await self._grab_banner(reader, writer, host)
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+                return {"port": port, "service": service, "open": True, "banner": banner}
+            except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
+                return {"port": port, "service": service, "open": False}
+            except Exception:
+                return {"port": port, "service": service, "open": False}
+
+    async def _grab_banner(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, host: str) -> str:
+        """Helper to read initial banners or request server headers on TCP ports."""
+        try:
+            banner = await asyncio.wait_for(reader.read(1024), timeout=1.5)
+            if banner:
+                return banner.decode("utf-8", errors="ignore").strip()
+            
+            # Probe HTTP header fallback
+            writer.write(f"GET / HTTP/1.1\r\nHost: {host}\r\n\r\n".encode())
+            await writer.drain()
+            resp = await asyncio.wait_for(reader.read(1024), timeout=1.5)
+            text = resp.decode("utf-8", errors="ignore")
+            for line in text.split("\r\n"):
+                if line.lower().startswith("server:"):
+                    return line.strip()
+            return ""
+        except Exception:
+            return ""

@@ -1,0 +1,38 @@
+{
+  "sqli": {
+    "clean": {
+      "status_code": 200,
+      "headers": {
+        "Content-Type": "text/html; charset=utf-8"
+      },
+      "body": "<html><body><h1>Product Details</h1><p>Product name: Laptop</p></body></html>"
+    }
+  },
+  "xss": {
+    "clean": {
+      "status_code": 200,
+      "headers": {
+        "Content-Type": "text/html; charset=utf-8"
+      },
+      "body": "<html><body><h1>Search Results</h1><p>You searched for: &lt;script&gt;alert(1)&lt;/script&gt;</p></body></html>"
+    }
+  },
+  "vulns": {
+    "cors_secure": {
+      "status_code": 200,
+      "headers": {
+        "Access-Control-Allow-Origin": "https://trusteddomain.com",
+        "Access-Control-Allow-Credentials": "true"
+      },
+      "body": "Secure CORS"
+    },
+    "clickjacking_protected": {
+      "status_code": 200,
+      "headers": {
+        "Content-Type": "text/html",
+        "X-Frame-Options": "DENY"
+      },
+      "body": "Protected page"
+    }
+  }
+}

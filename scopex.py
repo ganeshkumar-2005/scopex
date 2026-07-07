@@ -5,67 +5,21 @@ import urllib.parse
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from utils.banner import display_banner
-from utils.helpers import validate_target, get_timestamp, get_readable_timestamp, severity_color, severity_icon
-from utils.crawler import Crawler
-from scanners import (
-    PortScanner, HeaderScanner, SSLScanner, DNSScanner, SubdomainScanner,
-    VulnScanner, SQLiScanner, XSSScanner, TechFingerprinter, CookieScanner,
-    WAFDetector, InfoDisclosureScanner, AuthScanner, APIScanner, WhoisScanner
-)
+from utils.helpers import validate_target, get_timestamp, severity_color, severity_icon
 from reports import generate_pdf_report
-import reports.pdf_report
-
-# --- Monkeypatch PDF Report Generator for ScopeX + Nuclei scan mode ---
-original_generate_pdf_report = reports.pdf_report.generate_pdf_report
-
-def custom_generate_pdf_report(scan_results: dict, output_filepath: str):
-    is_nuclei_mode = (
-        scan_results.get("scan_mode") == "ScopeX + Nuclei" or 
-        any(f.get("module") == "Nuclei Integration" for f in scan_results.get("findings", []))
-    )
-    original_header = reports.pdf_report.ScopeXReport.header
-    
-    if is_nuclei_mode:
-        def custom_header(self):
-            self.set_fill_color(30, 41, 59)
-            self.rect(0, 0, 210, 30, 'F')
-            self.set_text_color(255, 255, 255)
-            self.set_font("Helvetica", "B", 18)
-            self.cell(10)
-            self.cell(0, 10, "SCOPEX SECURITY AUDIT REPORT", 0, 1, "L")
-            self.set_font("Helvetica", "I", 10)
-            self.cell(10)
-            self.cell(0, 10, "Developed by Ganesh Kumar | ScopeX + Nuclei", 0, 0, "L")
-            self.ln(20)
-        reports.pdf_report.ScopeXReport.header = custom_header
-        
-    try:
-        original_generate_pdf_report(scan_results, output_filepath)
-    finally:
-        reports.pdf_report.ScopeXReport.header = original_header
-
-reports.pdf_report.generate_pdf_report = custom_generate_pdf_report
-reports.generate_pdf_report = custom_generate_pdf_report
-generate_pdf_report = custom_generate_pdf_report
 
 console = Console()
-
 CONFIG_PATH = "config.json"
 
 def load_config():
     if os.path.exists(CONFIG_PATH):
         try:
-            with open(CONFIG_PATH, "r") as f:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             pass
     return {}
-
-def make_progress_callback(progress, task_id):
-    """Generates a progress updating callback for Rich progress bars."""
-    return lambda curr, total: progress.update(task_id, completed=int((curr / total) * 100))
 
 @click.group()
 def cli():
@@ -85,7 +39,7 @@ def config():
     if click.confirm("Would you like to customize the default scan profile?"):
         new_prof = click.prompt("Choose profile (quick, standard, full)", type=click.Choice(["quick", "standard", "full"]))
         conf["default_profile"] = new_prof
-        with open(CONFIG_PATH, "w") as f:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(conf, f, indent=2)
         console.print("[green]* Configuration updated successfully![/green]")
 
@@ -120,28 +74,42 @@ def config():
 @click.option("--nuclei-tags", help="Comma-separated list of tags to run with Nuclei.")
 @click.option("--nuclei-templates", help="Path to a specific Nuclei template file or directory.")
 @click.option("--force", "-f", is_flag=True, help="Bypass interactive scan permission confirmation.")
-def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois, deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance, run_all, nuclei, nuclei_tags, nuclei_templates, force):
+# V2 specific flags
+@click.option("--auth-user", help="Username for authenticated scanning.")
+@click.option("--auth-pass", help="Password for authenticated scanning.")
+@click.option("--auth-url", help="Login URL for authenticated scanning.")
+@click.option("--resume", "resume_checkpoint", help="Path to checkpoint JSON file to resume scan.")
+@click.option("--waf-evasion", type=click.Choice(["stealth", "aggressive", "bypass"]), help="Enable WAF evasion with selected profile.")
+@click.option("--skip-nuclei", is_flag=True, help="Skip Nuclei scan integration.")
+@click.option("--output-json", is_flag=True, help="Output results in JSON format to stdout.")
+@click.option("--debug", is_flag=True, help="Enable verbose console debugging output.")
+def scan(
+    target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois,
+    deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf,
+    plugin_compliance, run_all, nuclei, nuclei_tags, nuclei_templates, force,
+    auth_user, auth_pass, auth_url, resume_checkpoint, waf_evasion, skip_nuclei, output_json, debug
+):
     """Audits targets for configuration flaws and security vulnerabilities."""
+    import asyncio
+    from core.context import ScanContext, AuthContext
+    from core.orchestrator import ScanOrchestrator
+    from utils.logging_config import setup_logging
+    
+    # Initialize logging
+    setup_logging(debug=debug)
+    
     display_banner(console)
     
-    # Store all kwargs for dynamic parameter checks later
-    kwargs = {
-        "ports": ports, "headers": headers, "ssl": ssl, "dns": dns, "subdomains": subdomains,
-        "vulns": vulns, "sqli": sqli, "xss": xss, "tech": tech, "cookies": cookies,
-        "waf": waf, "info": info, "auth": auth, "api": api, "whois": whois, "deep": deep,
-        "plugins": plugins, "plugin_ssl": plugin_ssl, "plugin_services": plugin_services,
-        "plugin_cms": plugin_cms, "plugin_network": plugin_network, "plugin_takeover": plugin_takeover,
-        "plugin_ssrf": plugin_ssrf, "plugin_compliance": plugin_compliance, "run_all": run_all,
-        "nuclei": nuclei, "nuclei_tags": nuclei_tags, "nuclei_templates": nuclei_templates
-    }
-
+    # Target validation
     try:
         validated_target = validate_target(target)
     except ValueError as e:
         console.print(f"[bold red]Error:[/bold red] {str(e)}")
         return
         
-    # Legal disclaimer confirmation
+    parsed_target = urllib.parse.urlparse(validated_target)
+    host = parsed_target.hostname or parsed_target.netloc
+
     console.print(f"[yellow]Target target resolved to:[/yellow] [bold cyan]{validated_target}[/bold cyan]")
     if not force:
         if not click.confirm("Do you have explicit permission to scan this host?"):
@@ -150,356 +118,145 @@ def scan(target, ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, c
     else:
         console.print("[yellow]Bypassing permission prompt (--force active). Ensure authorization exists.[/yellow]")
         
+    # Load configuration
     conf = load_config()
     profile_name = conf.get("default_profile", "standard")
-    profile = conf.get("profiles", {}).get(profile_name, {"ports": [80, 443], "timeout": 3.0})
-    
-    # Collect modules to execute
-    run_ports = ports or run_all
-    run_headers = headers or run_all
-    run_ssl = ssl or run_all
-    run_dns = dns or run_all
-    run_subdomains = subdomains or run_all
-    run_vulns = vulns or run_all
-    run_whois = whois or run_all
-    
-    # Deep modules
-    run_sqli = sqli or deep or run_all
-    run_xss = xss or deep or run_all
-    run_tech = tech or deep or run_all
-    run_cookies = cookies or deep or run_all
-    run_waf = waf or deep or run_all
-    run_info = info or deep or run_all
-    run_auth = auth or deep or run_all
-    run_api = api or deep or run_all
-    
-    # If no flags are provided, run a standard set of basic scans
-    if not any([ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois, deep, plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance, run_all]):
-        run_ports = run_headers = run_ssl = run_dns = run_vulns = True
+    profile = conf.get("profiles", {}).get(profile_name, {})
+    timeout = profile.get("timeout", 3.0)
 
-    run_nuclei = nuclei or run_all
-    results = {
-        "target": validated_target,
-        "timestamp": get_readable_timestamp(),
-        "findings": [],
-        "scans": {}
-    }
-    if run_nuclei:
-        results["scan_mode"] = "ScopeX + Nuclei"
+    # Determine which scanners to run
+    scanners_to_run = []
     
-    all_findings = []
-    
-    nuclei_thread = None
-    nuclei_findings = []
-    if run_nuclei:
-        from utils.nuclei_integration import check_nuclei_installed, run_nuclei_integration
-        version_warning = check_nuclei_installed()
+    any_scanners_requested = any([
+        ports, headers, ssl, dns, subdomains, vulns, sqli, xss, tech, cookies, waf, info, auth, api, whois,
+        plugins, plugin_ssl, plugin_services, plugin_cms, plugin_network, plugin_takeover, plugin_ssrf, plugin_compliance
+    ])
+
+    if run_all:
+        scanners_to_run = None  # None tells orchestrator to run all
+    elif any_scanners_requested:
+        if ports: scanners_to_run.append("ports")
+        if headers: scanners_to_run.append("headers")
+        if ssl: scanners_to_run.append("ssl")
+        if dns: scanners_to_run.append("dns")
+        if subdomains: scanners_to_run.append("subdomain")
+        if vulns: scanners_to_run.append("vulns")
+        if sqli: scanners_to_run.append("sqli")
+        if xss: scanners_to_run.append("xss")
+        if tech: scanners_to_run.append("tech")
+        if cookies: scanners_to_run.append("cookies")
+        if waf: scanners_to_run.append("waf")
+        if info: scanners_to_run.append("info")
+        if auth: scanners_to_run.append("auth_paths")
+        if api: scanners_to_run.append("api")
+        if whois: scanners_to_run.append("whois")
         
-        import threading
-        def worker():
-            nonlocal nuclei_findings
-            try:
-                nuclei_findings = run_nuclei_integration(
-                    validated_target,
-                    nuclei_tags=nuclei_tags,
-                    nuclei_templates=nuclei_templates,
-                    version_warning=version_warning
-                )
-            except Exception as e:
-                console.print(f"[bold red]Nuclei Scan Error:[/bold red] {str(e)}")
-                
-        nuclei_thread = threading.Thread(target=worker)
-        nuclei_thread.start()
-    
-    # Set up Rich progress bar
-    with Progress(
-        SpinnerColumn("line"),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(bar_width=40),
-        TaskProgressColumn(),
-        console=console
-    ) as progress:
-        
-        # 1. WAF Scan
-        if run_waf:
-            t = progress.add_task("[cyan]Detecting WAF/CDN Protection...", total=100)
-            waf_scanner = WAFDetector(validated_target, timeout=profile["timeout"])
-            waf_res = waf_scanner.scan()
-            progress.update(t, completed=100)
-            results["scans"]["waf"] = waf_res
-            all_findings.extend(waf_res.get("findings", []))
-            
-        # 2. Port Scan
-        if run_ports:
-            t = progress.add_task("[cyan]Scanning open TCP ports...", total=100)
-            port_scanner = PortScanner(validated_target, ports=profile["ports"], timeout=profile["timeout"])
-            port_res = port_scanner.scan(progress_callback=make_progress_callback(progress, t))
-            results["scans"]["ports"] = port_res
-            all_findings.extend(port_res.get("findings", []))
-
-        # 3. HTTP Headers Audit
-        if run_headers:
-            t = progress.add_task("[cyan]Auditing security headers...", total=100)
-            h_scanner = HeaderScanner(validated_target, timeout=profile["timeout"])
-            h_res = h_scanner.scan()
-            progress.update(t, completed=100)
-            results["scans"]["headers"] = h_res
-            all_findings.extend(h_res.get("findings", []))
-            
-        # 4. SSL/TLS Audit
-        if run_ssl:
-            t = progress.add_task("[cyan]Auditing SSL/TLS parameters...", total=100)
-            ssl_scanner = SSLScanner(validated_target, timeout=profile["timeout"])
-            ssl_res = ssl_scanner.scan()
-            progress.update(t, completed=100)
-            results["scans"]["ssl"] = ssl_res
-            all_findings.extend(ssl_res.get("findings", []))
-            
-        # 5. DNS Audit
-        if run_dns:
-            t = progress.add_task("[cyan]Resolving DNS host records...", total=100)
-            dns_scanner = DNSScanner(validated_target)
-            dns_res = dns_scanner.scan()
-            progress.update(t, completed=100)
-            results["scans"]["dns"] = dns_res
-            all_findings.extend(dns_res.get("findings", []))
-
-        # 5.5 WHOIS Lookup
-        if run_whois:
-            t = progress.add_task("[cyan]Performing WHOIS domain lookup...", total=100)
-            whois_scanner = WhoisScanner(validated_target, timeout=profile["timeout"])
-            whois_res = whois_scanner.scan()
-            progress.update(t, completed=100)
-            results["scans"]["whois"] = whois_res
-            all_findings.extend(whois_res.get("findings", []))
-
-        # 6. Subdomain Enumeration
-        if run_subdomains:
-            t = progress.add_task("[cyan]Enumerating subdomains...", total=100)
-            sub_scanner = SubdomainScanner(validated_target, subdomains=conf.get("dns_wordlist"))
-            sub_res = sub_scanner.scan(progress_callback=make_progress_callback(progress, t))
-            progress.update(t, completed=100)
-            results["scans"]["subdomains"] = sub_res
-            all_findings.extend(sub_res.get("findings", []))
-
-        # 7. Technology Stack Check
-        if run_tech:
-            t = progress.add_task("[cyan]Fingerprinting software stack...", total=100)
-            tech_scanner = TechFingerprinter(validated_target, timeout=profile["timeout"])
-            tech_res = tech_scanner.scan()
-            progress.update(t, completed=100)
-            results["scans"]["tech"] = tech_res
-            all_findings.extend(tech_res.get("findings", []))
-
-        # 8. Cookie Audit
-        if run_cookies:
-            t = progress.add_task("[cyan]Auditing cookie security flags...", total=100)
-            cookie_scanner = CookieScanner(validated_target, timeout=profile["timeout"])
-            cookie_res = cookie_scanner.scan()
-            progress.update(t, completed=100)
-            results["scans"]["cookies"] = cookie_res
-            all_findings.extend(cookie_res.get("findings", []))
-
-        # 9. Core Vulnerabilities Check
-        if run_vulns:
-            t = progress.add_task("[cyan]Checking core web vulnerabilities...", total=100)
-            vuln_scanner = VulnScanner(validated_target, timeout=profile["timeout"])
-            vuln_res = vuln_scanner.scan()
-            progress.update(t, completed=100)
-            results["scans"]["vulns"] = vuln_res
-            all_findings.extend(vuln_res.get("findings", []))
-
-        # Check if target has parameters
-        parsed_target = urllib.parse.urlparse(validated_target)
-        target_params = urllib.parse.parse_qs(parsed_target.query)
-        discovered_parameterized_urls = []
-        
-        # If no parameters, run crawler to find endpoints
-        if not target_params and (run_sqli or run_xss or kwargs.get("plugin_ssrf") or kwargs.get("run_all")):
-            t = progress.add_task("[cyan]Crawling to discover parameterized endpoints...", total=100)
-            crawler = Crawler(validated_target, max_depth=2, max_links=50, timeout=profile["timeout"])
-            discovered_parameterized_urls = crawler.crawl()
-            progress.update(t, completed=100)
-            if discovered_parameterized_urls:
-                results["scans"]["crawler"] = {"discovered_urls": discovered_parameterized_urls}
-
-        # 10. Deep SQLi Scanner
-        if run_sqli:
-            t = progress.add_task("[cyan]Testing SQL Injection vectors...", total=100)
-            sqli_scanner = SQLiScanner(validated_target, discovered_urls=discovered_parameterized_urls, timeout=profile["timeout"])
-            sqli_res = sqli_scanner.scan(progress_callback=make_progress_callback(progress, t))
-            progress.update(t, completed=100)
-            results["scans"]["sqli"] = sqli_res
-            all_findings.extend(sqli_res.get("findings", []))
-
-        # 11. Deep XSS Scanner
-        if run_xss:
-            t = progress.add_task("[cyan]Testing XSS script vulnerabilities...", total=100)
-            xss_scanner = XSSScanner(validated_target, discovered_urls=discovered_parameterized_urls, timeout=profile["timeout"])
-            xss_res = xss_scanner.scan(progress_callback=make_progress_callback(progress, t))
-            progress.update(t, completed=100)
-            results["scans"]["xss"] = xss_res
-            all_findings.extend(xss_res.get("findings", []))
-
-        # 12. Information Disclosure
-        if run_info:
-            t = progress.add_task("[cyan]Mining info disclosure risks...", total=100)
-            info_scanner = InfoDisclosureScanner(validated_target, timeout=profile["timeout"])
-            info_res = info_scanner.scan(progress_callback=make_progress_callback(progress, t))
-            progress.update(t, completed=100)
-            results["scans"]["info"] = info_res
-            all_findings.extend(info_res.get("findings", []))
-
-        # 13. Administrative Panels Discovery
-        if run_auth:
-            t = progress.add_task("[cyan]Looking for admin/login interfaces...", total=100)
-            auth_scanner = AuthScanner(validated_target, timeout=profile["timeout"])
-            auth_res = auth_scanner.scan(progress_callback=make_progress_callback(progress, t))
-            progress.update(t, completed=100)
-            results["scans"]["auth"] = auth_res
-            all_findings.extend(auth_res.get("findings", []))
-
-        # 14. API endpoints discovery
-        if run_api:
-            t = progress.add_task("[cyan]Discovering API routes...", total=100)
-            api_scanner = APIScanner(validated_target, timeout=profile["timeout"])
-            api_res = api_scanner.scan(progress_callback=make_progress_callback(progress, t))
-            progress.update(t, completed=100)
-            results["scans"]["api"] = api_res
-            all_findings.extend(api_res.get("findings", []))
-
-        # --- Nessus-Style Advanced Plugins ---
-        # Import plugin registry
-        from plugins import PLUGIN_REGISTRY, get_plugin
-
-        run_plugins = kwargs.get("plugins") or kwargs.get("run_all")
-        
-        # Determine specific plugins to run
-        active_plugins = []
-        plugin_flags = {
-            "ssl": kwargs.get("plugin_ssl"),
-            "services": kwargs.get("plugin_services"),
-            "cms": kwargs.get("plugin_cms"),
-            "network": kwargs.get("plugin_network"),
-            "takeover": kwargs.get("plugin_takeover"),
-            "ssrf": kwargs.get("plugin_ssrf"),
-            "compliance": kwargs.get("plugin_compliance")
-        }
-
-        for plugin_name, flag_active in plugin_flags.items():
-            if run_plugins or flag_active:
-                active_plugins.append(plugin_name)
-
-        # Execute selected plugins
-        results["plugins"] = {}
-        for plugin_id in active_plugins:
-            # Skip compliance scoring plugin until last, as it analyzes previous findings
-            if plugin_id == "compliance":
-                continue
-                
-            plugin_info = PLUGIN_REGISTRY[plugin_id]
-            t = progress.add_task(f"[cyan]Running Plugin: {plugin_info['name']}...", total=100)
-            
-            try:
-                # Instantiate plugin
-                extra_args = {}
-                if plugin_id == "takeover":
-                    # Pass subdomains finding references
-                    extra_args["discovered_subdomains"] = results["scans"].get("subdomains", {}).get("findings", [])
-                elif plugin_id == "ssrf":
-                    extra_args["discovered_urls"] = discovered_parameterized_urls
-                
-                plugin_instance = get_plugin(plugin_id, validated_target, timeout=profile["timeout"], **extra_args)
-                plugin_res = plugin_instance.run()
-                progress.update(t, completed=100)
-                
-                results["plugins"][plugin_id] = plugin_res
-                all_findings.extend(plugin_res.get("findings", []))
-            except Exception as e:
-                progress.update(t, completed=100)
-                console.print(f"[bold red]Plugin Error ({plugin_id}):[/bold red] {str(e)}")
-
-        # Wait and merge Nuclei findings in parallel
-        if run_nuclei:
-            t_nuclei = progress.add_task("[cyan]Completing Nuclei Integration scan...", total=100)
-            if nuclei_thread:
-                nuclei_thread.join()
-            progress.update(t_nuclei, completed=100)
-            
-            results["scans"]["nuclei"] = {
-                "findings": nuclei_findings
-            }
-            
-            # Deduplicate by comparing title plus target
-            # Keep the ScopeX finding and discard the Nuclei duplicate.
-            scopex_findings = all_findings.copy()
-            scopex_keys = {(f.get("title"), f.get("target")) for f in scopex_findings}
-            
-            filtered_nuclei_findings = []
-            for nf in nuclei_findings:
-                key = (nf.get("title"), nf.get("target"))
-                if key not in scopex_keys:
-                    filtered_nuclei_findings.append(nf)
+        # Deep profile adds all deep scanners if requested
+        if deep:
+            deep_keys = ["sqli", "xss", "tech", "cookies", "waf", "info", "auth_paths", "api"]
+            for dk in deep_keys:
+                if dk not in scanners_to_run:
+                    scanners_to_run.append(dk)
                     
-            all_findings = scopex_findings + filtered_nuclei_findings
+        # Plugins
+        if plugins:
+            scanners_to_run.append("plugins")
+        else:
+            if plugin_ssl: scanners_to_run.append("plugin:ssl")
+            if plugin_services: scanners_to_run.append("plugin:services")
+            if plugin_cms: scanners_to_run.append("plugin:cms")
+            if plugin_network: scanners_to_run.append("plugin:network")
+            if plugin_takeover: scanners_to_run.append("plugin:takeover")
+            if plugin_ssrf: scanners_to_run.append("plugin:ssrf")
+            if plugin_compliance: scanners_to_run.append("plugin:compliance")
+    else:
+        # Default scan profile list
+        scanners_to_run = profile.get("scanners", ["ports", "headers", "ssl", "dns", "vulns"])
+        if scanners_to_run == "all":
+            scanners_to_run = None
 
-        # Run Compliance scoring last if enabled
-        if run_plugins or kwargs.get("plugin_compliance"):
-            plugin_info = PLUGIN_REGISTRY["compliance"]
-            t = progress.add_task(f"[cyan]Running Compliance Audit...", total=100)
-            try:
-                # Pass all accumulated findings up to this point
-                comp_plugin = get_plugin("compliance", validated_target, timeout=profile["timeout"], existing_findings=all_findings)
-                comp_res = comp_plugin.run()
-                progress.update(t, completed=100)
-                
-                results["plugins"]["compliance"] = comp_res
-                all_findings.extend(comp_res.get("findings", []))
-            except Exception as e:
-                progress.update(t, completed=100)
-                console.print(f"[bold red]Plugin Error (compliance):[/bold red] {str(e)}")
+    # AuthContext setup
+    auth_ctx = None
+    login_url = auth_url or conf.get("authentication", {}).get("login_url")
+    username = auth_user or conf.get("authentication", {}).get("username")
+    password = auth_pass or conf.get("authentication", {}).get("password")
+    
+    if login_url and username and password:
+        auth_ctx = AuthContext(
+            login_url=login_url,
+            username=username,
+            password=password,
+            username_field=conf.get("authentication", {}).get("username_field", "username"),
+            password_field=conf.get("authentication", {}).get("password_field", "password"),
+            success_indicator=conf.get("authentication", {}).get("success_indicator", ""),
+        )
 
-    # Deduplicate findings before writing
-    deduplicated_findings = []
-    seen_keys = set()
-    for f in all_findings:
-        # Generate a unique key based on target, title, and severity
-        key = (f.get("target"), f.get("title"), f.get("severity"))
-        if key not in seen_keys:
-            seen_keys.add(key)
-            deduplicated_findings.append(f)
+    # ScanContext setup
+    waf_evasion_enabled = waf_evasion is not None or conf.get("waf_evasion", {}).get("enabled", False)
+    waf_evasion_profile = waf_evasion or conf.get("waf_evasion", {}).get("profile", "stealth")
+    
+    should_skip_nuclei = skip_nuclei or not (nuclei or run_all) or profile.get("nuclei_tags") == []
 
-    results["findings"] = deduplicated_findings
-    all_findings = deduplicated_findings
+    ctx = ScanContext(
+        target=validated_target,
+        host=host,
+        profile=profile_name,
+        ports=profile.get("ports", []),
+        timeout=timeout,
+        waf_evasion=waf_evasion_enabled,
+        waf_evasion_profile=waf_evasion_profile,
+        auth=auth_ctx,
+        skip_nuclei=should_skip_nuclei,
+        nuclei_tags=[t.strip() for t in nuclei_tags.split(",")] if nuclei_tags else profile.get("nuclei_tags", []),
+        nuclei_templates=nuclei_templates,
+        resume_checkpoint=resume_checkpoint,
+    )
 
-    # Save scan data to output JSON
+    # Attach CLI output settings to context for orchestrator progress visibility
+    ctx.output_json = output_json
+
+    async def run_orchestrator():
+        orchestrator = ScanOrchestrator()
+        return await orchestrator.run(ctx, scanners_to_run)
+
+    result = asyncio.run(run_orchestrator())
+
+    # Write output to JSON
     ts = get_timestamp()
     os.makedirs("output", exist_ok=True)
     output_filename = f"output/scan_{ts}.json"
-    with open(output_filename, "w") as f:
-        json.dump(results, f, indent=2)
-        
+    result_dict = result.to_dict()
+    
+    with open(output_filename, "w", encoding="utf-8") as f:
+        json.dump(result_dict, f, indent=2)
+
+    # Output JSON directly if requested
+    if output_json:
+        click.echo(json.dumps(result_dict, indent=2))
+        return
+
     console.print(f"\n[green]* Scan complete! Results recorded to: [bold white]{output_filename}[/bold white][/green]")
 
-    # Print summary findings to console
+    # Print summary Table
     table = Table(title="ScopeX Vulnerability Scan Results", show_header=True, header_style="bold magenta")
     table.add_column("Severity", justify="center")
     table.add_column("Module", justify="left")
     table.add_column("Title", justify="left")
     table.add_column("Target/URL", justify="left")
 
-    # Sort findings by severity for ordered display
+    all_findings = result.all_findings
+    
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
-    all_findings.sort(key=lambda f: severity_order.get(f.get("severity", "INFO").upper(), 5))
+    all_findings.sort(key=lambda f: severity_order.get(f.severity.upper(), 5))
 
     for f in all_findings:
-        color = severity_color(f["severity"])
-        icon = severity_icon(f["severity"])
+        color = severity_color(f.severity)
+        icon = severity_icon(f.severity)
         table.add_row(
-            f"[{color}]{icon} {f['severity']}[/{color}]",
-            f["module"],
-            f["title"],
-            f["target"]
+            f"[{color}]{icon} {f.severity}[/{color}]",
+            f.module,
+            f.title,
+            f.target
         )
 
     if all_findings:
@@ -517,22 +274,18 @@ def report(input_file, output_file):
         return
         
     try:
-        with open(input_file, "r") as f:
+        with open(input_file, "r", encoding="utf-8") as f:
             scan_results = json.load(f)
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] Failed to parse JSON file: {str(e)}")
         return
 
-    # Determine Downloads folder path
     downloads_folder = os.path.join(os.path.expanduser("~"), "Downloads")
     if not os.path.exists(downloads_folder):
-        downloads_folder = os.path.expanduser("~")  # Fallback to home directory
+        downloads_folder = os.path.expanduser("~")
 
-    # Build PDF filename
     base_name = os.path.basename(input_file).replace(".json", "_report.pdf")
     downloads_path = os.path.join(downloads_folder, base_name)
-
-    # If user provided custom output path, use it; otherwise default to Downloads
     final_path = output_file if output_file else downloads_path
         
     console.print(f"[yellow]Generating PDF report from {input_file}...[/yellow]")
@@ -542,7 +295,6 @@ def report(input_file, output_file):
         console.print(f"\n[green]* Professional PDF security audit report generated![/green]")
         console.print(f"[bold white]  Saved to: {final_path}[/bold white]")
         
-        # Also save a copy in the output/ folder for reference
         output_copy = os.path.join("output", base_name)
         if final_path != output_copy:
             import shutil
@@ -552,6 +304,22 @@ def report(input_file, output_file):
         console.print(f"\n[bold cyan]>> Report downloaded to your Downloads folder! <<[/bold cyan]")
     except Exception as e:
         console.print(f"[bold red]Error generating report:[/bold red] {str(e)}")
+
+@cli.command()
+@click.option("--port", default=8080, help="Port to host the dashboard on (default: 8080).")
+def dashboard(port):
+    """Launches the premium HTML interactive visualizer dashboard."""
+    display_banner(console)
+    console.print(Panel(f"[bold cyan]ScopeX Interactive Visualizer[/bold cyan]\n[dim]Hosting at: http://localhost:{port}[/dim]"))
+    
+    from reports.dashboard import start_dashboard
+    start_dashboard(port)
+
+@cli.command(name="_run_plugin", hidden=True)
+def run_plugin():
+    """Hidden command to execute isolated plugins in a subprocess."""
+    from plugins.runner import main as runner_main
+    runner_main()
 
 if __name__ == "__main__":
     cli()

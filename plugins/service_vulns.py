@@ -7,6 +7,8 @@ class ServiceVulnPlugin(BasePlugin):
     PLUGIN_NAME = "Service Vulnerability Scanner"
     PLUGIN_FAMILY = "Services"
     PLUGIN_VERSION = "1.0"
+    PLUGIN_SHORT_KEY = "services"
+    DESCRIPTION = "FTP anon, SSH weak algos, SMTP relay, DB no-auth checks"
 
     def run(self, progress_callback=None) -> dict:
         """Runs service vulnerability audits."""

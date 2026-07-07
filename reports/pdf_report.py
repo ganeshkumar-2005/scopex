@@ -1,3 +1,4 @@
+import json
 from fpdf import FPDF
 from utils.helpers import get_readable_timestamp
 
@@ -14,7 +15,15 @@ class ScopeXReport(FPDF):
         
         self.set_font("Helvetica", "I", 10)
         self.cell(10)
-        self.cell(0, 10, "Developed by Ganesh Kumar | Full-Spectrum Vulnerability Scan", 0, 0, "L")
+        
+        scan_mode = None
+        if hasattr(self, "scan_results") and self.scan_results:
+            scan_mode = self.scan_results.get("scan_mode")
+            if not scan_mode and any(f.get("module") == "Nuclei Integration" for f in self.scan_results.get("findings", [])):
+                scan_mode = "ScopeX + Nuclei"
+                
+        suffix = f" | {scan_mode}" if scan_mode else " | Full-Spectrum Vulnerability Scan"
+        self.cell(0, 10, f"Developed by Ganesh Kumar{suffix}", 0, 0, "L")
         self.ln(20)
 
     def footer(self):
@@ -27,6 +36,7 @@ class ScopeXReport(FPDF):
 def generate_pdf_report(scan_results: dict, output_filepath: str):
     """Generates a professional PDF audit report using fpdf2."""
     pdf = ScopeXReport()
+    pdf.scan_results = scan_results
     pdf.alias_nb_pages()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=20)
@@ -176,6 +186,8 @@ def generate_pdf_report(scan_results: dict, output_filepath: str):
             # CVE / CVSS Info
             cves = f.get("cve_ids", [])
             cvss = f.get("cvss_score", 0.0)
+            if cvss is None:
+                cvss = 0.0
             if cves or cvss > 0.0:
                 info_text = f"CVSS Score: {cvss}"
                 if cves:
@@ -188,12 +200,17 @@ def generate_pdf_report(scan_results: dict, output_filepath: str):
 
             # Evidence
             evidence = f.get("evidence", "No technical proof required.")
+            if isinstance(evidence, dict):
+                evidence = json.dumps(evidence, indent=2)
+            elif not isinstance(evidence, str):
+                evidence = str(evidence) if evidence is not None else ""
+
             if not evidence or evidence.strip() == "":
                 evidence = "No technical proof required."
             draw_field("Evidence / Proof:", evidence, font_name="Courier", font_size=9, color=(100, 116, 139))
 
             # Remediation
-            remedy = f.get("remediation", f.get("reremedy", "Apply security patches or update service settings."))
+            remedy = f.get("remediation", "Apply security patches or update service settings.")
             if not remedy or remedy.strip() == "":
                 remedy = "Apply security patches or update service settings."
             draw_field("Remediation Guide:", remedy, color=(22, 163, 74))  # Muted green for solution

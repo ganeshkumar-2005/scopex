@@ -1,0 +1,12 @@
+id: exposed_env
+title: Exposed Environment File (.env)
+severity: CRITICAL
+description: A publicly accessible .env configuration file was detected on the target server. This file commonly contains highly sensitive secrets such as database credentials, API keys, and private salts.
+remediation: Move the .env file outside the public HTML web root or block all incoming requests to it.
+match:
+  paths:
+    - "/.env"
+  status: 200
+  body:
+    - "DB_HOST="
+    - "APP_ENV="

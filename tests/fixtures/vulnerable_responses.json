@@ -1,0 +1,44 @@
+{
+  "sqli": {
+    "mysql": {
+      "status_code": 200,
+      "headers": {
+        "Content-Type": "text/html; charset=utf-8"
+      },
+      "body": "<html><body><h1>Product Details</h1><p>Error: You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '' at line 1</p></body></html>"
+    },
+    "postgresql": {
+      "status_code": 500,
+      "headers": {
+        "Content-Type": "text/html"
+      },
+      "body": "<html><body><h1>Internal Server Error</h1><p>Severity: ERROR<br>Code: 42601<br>Message: syntax error at or near \"'\"</p></body></html>"
+    }
+  },
+  "xss": {
+    "reflected": {
+      "status_code": 200,
+      "headers": {
+        "Content-Type": "text/html; charset=utf-8"
+      },
+      "body": "<html><body><h1>Search Results</h1><p>You searched for: <script>alert(1)</script></p></body></html>"
+    }
+  },
+  "vulns": {
+    "cors_wildcard": {
+      "status_code": 200,
+      "headers": {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Credentials": "true"
+      },
+      "body": "CORS sensitive endpoint"
+    },
+    "clickjacking_missing_xfo": {
+      "status_code": 200,
+      "headers": {
+        "Content-Type": "text/html"
+      },
+      "body": "No X-Frame-Options or CSP frame-ancestors"
+    }
+  }
+}

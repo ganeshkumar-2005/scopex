@@ -8,6 +8,8 @@ class SSLVulnPlugin(BasePlugin):
     PLUGIN_NAME = "SSL/TLS Vulnerability Scanner"
     PLUGIN_FAMILY = "SSL/TLS"
     PLUGIN_VERSION = "1.0"
+    PLUGIN_SHORT_KEY = "ssl"
+    DESCRIPTION = "Checks for Heartbleed, POODLE, BEAST, DROWN, FREAK, CRIME"
     
     def run(self, progress_callback=None) -> dict:
         """Runs all SSL/TLS vulnerability checks."""

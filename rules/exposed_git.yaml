@@ -1,0 +1,12 @@
+id: exposed_git
+title: Exposed Git Repository
+severity: CRITICAL
+description: The target has a publicly accessible Git configuration file (.git/config). This allows remote attackers to clone the repository source code and extract credentials.
+remediation: Restrict public access to the .git directory or delete it from the production web root.
+match:
+  paths:
+    - "/.git/config"
+  status: 200
+  body:
+    - "\\[core\\]"
+    - "repositoryformatversion"

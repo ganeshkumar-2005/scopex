@@ -1,186 +1,324 @@
-import urllib.parse
-from bs4 import BeautifulSoup
-from utils.helpers import make_web_request
+"""
+scanners/crawler.py — Async web crawler for ScopeX v2.
 
+AsyncCrawler uses the shared httpx.AsyncClient from the orchestrator.
+Legacy sync Crawler class is preserved for backward compatibility with
+scanners not yet migrated (sqli_scanner, xss_scanner old versions).
+"""
+from __future__ import annotations
+
+import asyncio
+import urllib.parse
+from typing import Dict, List, Optional, Set
+
+import httpx
+from bs4 import BeautifulSoup
+from loguru import logger
+
+from core.context import ScanContext
+
+
+class AsyncCrawler:
+    """
+    Async web crawler. Uses the shared httpx.AsyncClient session.
+    Results are stored in ScanContext so all scanners share a single crawl.
+
+    Returns dict with:
+      - urls_with_params: List[str] — pages with query parameters
+      - form_targets:     List[dict] — {action, method, fields}
+      - pages_visited:    int
+      - all_pages_html:   Dict[url, html_text]
+    """
+
+    MAX_PAGES = 40  # Hard limit to prevent runaway crawls
+    MAX_CONCURRENT = 5  # Max parallel page fetches
+
+    def __init__(self, ctx: ScanContext, client: httpx.AsyncClient) -> None:
+        self.ctx = ctx
+        self.client = client
+        self.root_url = ctx.target
+        self.log = logger.bind(scanner="AsyncCrawler")
+
+        try:
+            parsed = urllib.parse.urlparse(self.root_url)
+            self._root_host = (parsed.hostname or "").lower()
+        except Exception:
+            self._root_host = ""
+
+    async def crawl(self) -> Dict:
+        """Run the async crawl and return results dict."""
+        visited: Set[str] = set()
+        urls_with_params: Set[str] = set()
+        form_targets: List[Dict] = []
+        all_pages_html: Dict[str, str] = {}
+        seen_forms: Set[tuple] = set()
+        queue: List[str] = [self.root_url]
+
+        semaphore = asyncio.Semaphore(self.MAX_CONCURRENT)
+
+        while queue and len(visited) < self.MAX_PAGES:
+            # Take a batch of URLs to fetch concurrently
+            batch = queue[:self.MAX_CONCURRENT]
+            queue = queue[self.MAX_CONCURRENT:]
+
+            tasks = [
+                self._fetch_page(url, semaphore)
+                for url in batch
+                if url not in visited
+            ]
+            if not tasks:
+                continue
+
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for url, res in zip(batch, results):
+                if url in visited:
+                    continue
+                visited.add(url)
+
+                if isinstance(res, Exception) or res is None:
+                    continue
+
+                html_text, status = res
+                if status != 200 or not html_text:
+                    continue
+
+                all_pages_html[url] = html_text
+
+                # Parse URLs and forms
+                try:
+                    new_urls, new_forms = self._parse_page(url, html_text)
+                except Exception as exc:
+                    self.log.debug(f"Parse error on {url}: {exc}")
+                    continue
+
+                for new_url in new_urls:
+                    if new_url not in visited and new_url not in queue:
+                        queue.append(new_url)
+                    parsed = urllib.parse.urlparse(new_url)
+                    if parsed.query:
+                        urls_with_params.add(new_url)
+
+                for form in new_forms:
+                    fkey = (form["action"], form["method"], tuple(form["fields"]))
+                    if fkey not in seen_forms:
+                        seen_forms.add(fkey)
+                        form_targets.append(form)
+
+        # Also include root URL itself if it has parameters
+        try:
+            root_parsed = urllib.parse.urlparse(self.root_url)
+            if root_parsed.query:
+                urls_with_params.add(self.root_url)
+        except Exception:
+            pass
+
+        self.log.info(
+            f"Crawl done: {len(visited)} pages, {len(urls_with_params)} param-URLs, "
+            f"{len(form_targets)} forms"
+        )
+        return {
+            "urls_with_params": sorted(urls_with_params),
+            "form_targets": form_targets,
+            "pages_visited": len(visited),
+            "all_pages_html": all_pages_html,
+        }
+
+    async def _fetch_page(self, url: str, semaphore: asyncio.Semaphore) -> Optional[tuple]:
+        """Fetch a single page; returns (html_text, status_code) or None."""
+        async with semaphore:
+            try:
+                resp = await self.client.get(url, follow_redirects=True, timeout=self.ctx.timeout)
+                content_type = resp.headers.get("content-type", "")
+                if "text/html" not in content_type.lower():
+                    return None
+                return (resp.text, resp.status_code)
+            except Exception:
+                return None
+
+    def _parse_page(self, page_url: str, html_text: str) -> tuple:
+        """Extract links and forms from a page. Returns (new_urls, forms)."""
+        soup = BeautifulSoup(html_text, "html.parser")
+        new_urls: List[str] = []
+        forms: List[Dict] = []
+
+        # Extract links
+        for a_tag in soup.find_all("a", href=True):
+            href = (a_tag["href"] or "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+                continue
+            try:
+                resolved = urllib.parse.urljoin(page_url, href)
+                parsed = urllib.parse.urlparse(resolved)
+                if parsed.scheme not in ("http", "https"):
+                    continue
+                clean = urllib.parse.urlunparse(
+                    (parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, "")
+                )
+                if self._is_same_host(clean):
+                    new_urls.append(clean)
+            except Exception:
+                continue
+
+        # Extract forms
+        for form in soup.find_all("form"):
+            action = form.get("action") or page_url
+            try:
+                resolved_action = urllib.parse.urljoin(page_url, action)
+                parsed_action = urllib.parse.urlparse(resolved_action)
+                clean_action = urllib.parse.urlunparse(
+                    (parsed_action.scheme, parsed_action.netloc, parsed_action.path,
+                     parsed_action.params, parsed_action.query, "")
+                )
+            except Exception:
+                clean_action = page_url
+
+            if not self._is_same_host(clean_action):
+                continue
+
+            method = (form.get("method") or "GET").upper()
+            if method not in ("GET", "POST"):
+                method = "GET"
+
+            fields = []
+            for tag in form.find_all(["input", "textarea", "select"]):
+                name = tag.get("name")
+                tag_type = tag.get("type", "text")
+                if name and tag_type not in ("submit", "reset", "file", "hidden"):
+                    fields.append(name)
+            fields = list(dict.fromkeys(fields))  # Deduplicate, preserve order
+
+            if fields:
+                forms.append({"action": clean_action, "method": method, "fields": fields})
+
+        return new_urls, forms
+
+    def _is_same_host(self, url: str) -> bool:
+        """Check if URL belongs to the same host as the scan target."""
+        try:
+            host = (urllib.parse.urlparse(url).hostname or "").lower()
+            return host == self._root_host
+        except Exception:
+            return False
+
+
+# ---------------------------------------------------------------------------
+# Legacy sync Crawler (kept for backward compatibility)
+# Scanners not yet migrated to async still import this directly.
+# ---------------------------------------------------------------------------
 class Crawler:
+    """
+    Legacy synchronous crawler. Preserved for backward compatibility.
+    New code should use AsyncCrawler instead.
+    """
     def __init__(self, target_url: str, timeout: float = 5.0, make_request_fn=None):
+        from utils.helpers import make_web_request
         self.target_url = target_url
-        if not target_url.startswith(("http://", "https://")):
-            self.root_url = f"https://{target_url}"
-        else:
-            self.root_url = target_url
+        self.root_url = target_url if target_url.startswith(("http://", "https://")) else f"https://{target_url}"
         self.timeout = timeout
         self.make_request_fn = make_request_fn or make_web_request
 
     def _is_same_host(self, url: str) -> bool:
         try:
-            parsed_url = urllib.parse.urlparse(url)
-            parsed_root = urllib.parse.urlparse(self.root_url)
-            url_host = parsed_url.hostname or ""
-            root_host = parsed_root.hostname or ""
-            return url_host.lower() == root_host.lower()
+            url_host = (urllib.parse.urlparse(url).hostname or "").lower()
+            root_host = (urllib.parse.urlparse(self.root_url).hostname or "").lower()
+            return url_host == root_host
         except Exception:
             return False
 
     def crawl(self) -> dict:
-        visited_pages = set()
-        urls_with_params = set()
+        visited: Set[str] = set()
+        urls_with_params: Set[str] = set()
         form_targets = []
-        seen_forms = set()  # To deduplicate forms: (action, method, tuple(fields))
-        all_pages_html = {}
-
+        seen_forms: Set[tuple] = set()
+        all_pages_html: Dict[str, str] = {}
         queue = [self.root_url]
 
-        while queue and len(visited_pages) < 30:
+        while queue and len(visited) < 30:
             current_url = queue.pop(0)
-
-            # Clean/normalize current_url by stripping fragment
             try:
                 parsed_current = urllib.parse.urlparse(current_url)
-                clean_current = urllib.parse.urlunparse((
-                    parsed_current.scheme,
-                    parsed_current.netloc,
-                    parsed_current.path,
-                    parsed_current.params,
-                    parsed_current.query,
-                    ''
-                ))
+                clean_current = urllib.parse.urlunparse(
+                    (parsed_current.scheme, parsed_current.netloc, parsed_current.path,
+                     parsed_current.params, parsed_current.query, "")
+                )
             except Exception:
                 continue
 
-            if clean_current in visited_pages:
-                continue
-
-            # Check same host before visiting
-            if not self._is_same_host(clean_current):
+            if clean_current in visited or not self._is_same_host(clean_current):
                 continue
 
             try:
                 response = self.make_request_fn(clean_current, timeout=self.timeout)
-                visited_pages.add(clean_current)
+                visited.add(clean_current)
                 if not response or response.status_code != 200:
                     continue
-
-                # Confirming it is HTML
-                is_html = True
-                if hasattr(response, "headers") and isinstance(response.headers, dict):
-                    content_type = response.headers.get("content-type", "") or response.headers.get("Content-Type", "")
-                    if content_type and "text/html" not in content_type.lower():
-                        is_html = False
-                
-                if not is_html:
+                content_type = response.headers.get("content-type", "") if hasattr(response, "headers") else ""
+                if content_type and "text/html" not in content_type.lower():
                     continue
 
                 all_pages_html[clean_current] = response.text
+                soup = BeautifulSoup(response.text, "html.parser")
 
-                html_content = response.text
-                soup = BeautifulSoup(html_content, "html.parser")
-
-                # 1. Collect and parse all HTML forms
                 for form in soup.find_all("form"):
-                    action = form.get("action", "")
-                    # Resolve relative actions
+                    action = form.get("action", "") or ""
                     resolved_action = urllib.parse.urljoin(clean_current, action)
-                    
-                    # Remove fragment from resolved_action
                     try:
-                        parsed_action = urllib.parse.urlparse(resolved_action)
-                        clean_action = urllib.parse.urlunparse((
-                            parsed_action.scheme,
-                            parsed_action.netloc,
-                            parsed_action.path,
-                            parsed_action.params,
-                            parsed_action.query,
-                            ''
-                        ))
+                        pa = urllib.parse.urlparse(resolved_action)
+                        clean_action = urllib.parse.urlunparse(
+                            (pa.scheme, pa.netloc, pa.path, pa.params, pa.query, "")
+                        )
                     except Exception:
                         clean_action = resolved_action
 
-                    # Keep forms within the same host
                     if not self._is_same_host(clean_action):
                         continue
 
-                    method = form.get("method", "GET").upper()
-                    if method not in ("GET", "POST"):
-                        method = "GET"
-
-                    # Collect fields: inputs, textareas, selects
-                    fields = []
-                    for input_tag in form.find_all(["input", "textarea", "select"]):
-                        name = input_tag.get("name")
-                        if name:
-                            fields.append(name)
-                    # Deduplicate fields while preserving order
-                    fields = list(dict.fromkeys(fields))
-
+                    method = (form.get("method") or "GET").upper()
+                    fields = list(dict.fromkeys(
+                        inp.get("name") for inp in form.find_all(["input", "textarea", "select"])
+                        if inp.get("name") and inp.get("type", "text") not in ("submit", "reset", "file", "hidden")
+                    ))
                     form_key = (clean_action, method, tuple(fields))
-                    if form_key not in seen_forms:
+                    if form_key not in seen_forms and fields:
                         seen_forms.add(form_key)
-                        form_targets.append({
-                            "action": clean_action,
-                            "method": method,
-                            "fields": fields
-                        })
+                        form_targets.append({"action": clean_action, "method": method, "fields": fields})
 
-                # 2. Extract internal links from <a> tags to crawl
                 for a_tag in soup.find_all("a", href=True):
-                    href = a_tag["href"].strip()
-                    # Skip empty or javascript links
+                    href = (a_tag["href"] or "").strip()
                     if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
                         continue
-
-                    resolved_url = urllib.parse.urljoin(clean_current, href)
-                    
+                    resolved = urllib.parse.urljoin(clean_current, href)
                     try:
-                        parsed_url = urllib.parse.urlparse(resolved_url)
-                        # We only follow http and https schemes
-                        if parsed_url.scheme not in ("http", "https"):
+                        pu = urllib.parse.urlparse(resolved)
+                        if pu.scheme not in ("http", "https"):
                             continue
-
-                        clean_url = urllib.parse.urlunparse((
-                            parsed_url.scheme,
-                            parsed_url.netloc,
-                            parsed_url.path,
-                            parsed_url.params,
-                            parsed_url.query,
-                            ''
-                        ))
+                        clean_url = urllib.parse.urlunparse(
+                            (pu.scheme, pu.netloc, pu.path, pu.params, pu.query, "")
+                        )
                     except Exception:
                         continue
-
                     if self._is_same_host(clean_url):
-                        # If has parameters, add to urls_with_params
-                        if parsed_url.query:
+                        if pu.query:
                             urls_with_params.add(clean_url)
-                        
-                        # Add to queue if not already visited or in queue
-                        if clean_url not in visited_pages and clean_url not in queue:
+                        if clean_url not in visited and clean_url not in queue:
                             queue.append(clean_url)
 
             except Exception:
-                # Add to visited pages so we don't retry endlessly in case of exception
-                visited_pages.add(clean_current)
+                visited.add(clean_current)
 
-        # Also, check if root url itself has query parameters
         try:
-            root_parsed = urllib.parse.urlparse(self.root_url)
-            if root_parsed.query:
-                # Strip fragment
-                clean_root = urllib.parse.urlunparse((
-                    root_parsed.scheme,
-                    root_parsed.netloc,
-                    root_parsed.path,
-                    root_parsed.params,
-                    root_parsed.query,
-                    ''
+            rp = urllib.parse.urlparse(self.root_url)
+            if rp.query:
+                urls_with_params.add(urllib.parse.urlunparse(
+                    (rp.scheme, rp.netloc, rp.path, rp.params, rp.query, "")
                 ))
-                urls_with_params.add(clean_root)
         except Exception:
             pass
 
         return {
-            "urls_with_params": sorted(list(urls_with_params)),
+            "urls_with_params": sorted(urls_with_params),
             "form_targets": form_targets,
-            "pages_visited": len(visited_pages),
-            "all_pages_html": all_pages_html
+            "pages_visited": len(visited),
+            "all_pages_html": all_pages_html,
         }

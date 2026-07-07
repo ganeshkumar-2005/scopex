@@ -9,6 +9,8 @@ class CMSPlugin(BasePlugin):
     PLUGIN_NAME = "CMS Vulnerability Scanner"
     PLUGIN_FAMILY = "Web CMS"
     PLUGIN_VERSION = "1.1"
+    PLUGIN_SHORT_KEY = "cms"
+    DESCRIPTION = "WordPress, Joomla, Drupal specific vulnerability detection"
 
     # Commonly-vulnerable WordPress plugins to probe for during enumeration.
     # Each tuple is (slug, human-readable name).

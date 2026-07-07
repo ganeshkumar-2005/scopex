@@ -1,304 +1,452 @@
-import html
+"""
+scanners/xss_scanner.py — XSS Scanner (v2 async rewrite, context-aware).
+
+Detects:
+  - Reflected XSS on GET params and POST forms (context-aware payloads)
+  - DOM-based XSS (static source/sink analysis)
+  - Stored XSS (re-fetch after injection)
+  - CSP mitigation detection
+  - Optional Playwright browser verification (if installed)
+
+Uses ScanContext.discovered_urls — no internal crawling.
+"""
+from __future__ import annotations
+
+import asyncio
+import html as html_module
 import urllib.parse
+from typing import Dict, List, Optional, Set, Tuple
+
+import httpx
 from bs4 import BeautifulSoup
-from utils.helpers import make_web_request
-from .crawler import Crawler
+from loguru import logger
 
-class XSSScanner:
-    def __init__(self, target: str, discovered_urls: list = None, timeout: float = 5.0):
-        self.target = target
-        if not target.startswith(("http://", "https://")):
-            self.url = f"https://{target}"
-        else:
-            self.url = target
-        self.discovered_urls = discovered_urls or []
-        self.timeout = timeout
-        
-        # Test payloads representing different injection contexts
-        self.payloads = [
-            # HTML body context
-            "<script>alert(1)</script>",
-            "<img src=x onerror=alert(1)>",
-            "<svg/onload=alert(1)>",
-            # Attribute context
-            "\" onmouseover=\"alert(1)",
-            "' onmouseover='alert(1)",
-            "javascript:alert(1)",
-            # Filter evasion polyglots
-            "jaVasCript:/*-/*`/*\\'`/*\"'/**/((alert(1)))",
-            "<svg><animatetransform onbegin=alert(1)>"
+from core.context import ScanContext
+from core.findings import Finding
+from scanners.base_scanner import BaseScanner
+
+# Playwright is optional
+try:
+    from playwright.async_api import async_playwright
+    _PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    _PLAYWRIGHT_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+# Payload definitions: (context, payload, description)
+# ---------------------------------------------------------------------------
+XSS_PAYLOADS: List[Tuple[str, str, str]] = [
+    # HTML body context
+    ("html_body", "<img src=x onerror=alert(1)>", "img onerror"),
+    ("html_body", "<svg/onload=alert(1)>", "svg onload"),
+    ("html_body", "<details open ontoggle=alert(1)>", "details ontoggle"),
+    ("html_body", "<script>alert(1)</script>", "script tag"),
+    # Attribute context
+    ('"attribute', '" autofocus onfocus=alert(1) x="', "attr break dquote"),
+    ("attribute", "' autofocus onfocus=alert(1) x='", "attr break squote"),
+    ("attribute", '" onmouseover=alert(1) "', "attr onmouseover"),
+    # JavaScript context
+    ("javascript", "'; alert(1); //", "js singlequote break"),
+    ("javascript", '"; alert(1); //', "js doublequote break"),
+    # URL/href context
+    ("url", "javascript:alert(1)", "javascript href"),
+    # Polyglot
+    ("polyglot", "jaVasCript:/*-/*`/*\\'`/*\"'/**/((alert(1)))", "polyglot"),
+]
+
+# DOM XSS dangerous sources and sinks
+DOM_SOURCES = [
+    "location.hash", "location.search", "location.href", "document.URL",
+    "document.referrer", "window.name", "document.cookie",
+]
+DOM_SINKS = [
+    "innerHTML", "outerHTML", "document.write", "document.writeln",
+    "eval(", "setTimeout(", "setInterval(", "Function(",
+    "location.href", ".src", ".action",
+]
+
+
+class XSSScanner(BaseScanner):
+    """
+    Async XSS scanner with context-aware payloads, CSP detection,
+    stored XSS detection, and optional Playwright verification.
+    """
+
+    async def scan(self) -> List[Finding]:
+        findings: List[Finding] = []
+        confirmed: Set[Tuple[str, str]] = set()  # (endpoint, param)
+
+        # Fetch baseline for DOM analysis + CSP detection
+        baseline_resp = await self.get(self.ctx.target)
+        if baseline_resp is None:
+            return [self.finding(
+                title="XSS Scanner: Target Unreachable",
+                severity="INFO",
+                description="Could not connect to target to perform XSS scanning.",
+                evidence={"target": self.ctx.target},
+                remediation="Verify the target is accessible.",
+            )]
+
+        csp = baseline_resp.headers.get("content-security-policy", "")
+        csp_blocks_inline = self._csp_blocks_inline(csp)
+
+        # Gather page HTML for DOM analysis (target + all discovered URLs)
+        all_page_html: Dict[str, str] = {self.ctx.target: baseline_resp.text}
+        for url in self.ctx.discovered_urls[:20]:  # Limit to first 20 to avoid excessive requests
+            resp = await self.get(url)
+            if resp:
+                all_page_html[url] = resp.text
+
+        # DOM XSS analysis
+        for page_url, page_html in all_page_html.items():
+            findings.extend(self._check_dom_xss(page_url, page_html, csp_blocks_inline))
+
+        # Collect parameterized URLs
+        urls_with_params = [u for u in self.ctx.discovered_urls if "?" in u]
+        if "?" in self.ctx.target and self.ctx.target not in urls_with_params:
+            urls_with_params.insert(0, self.ctx.target)
+
+        # Extract forms from crawled pages
+        form_targets = self._extract_forms(all_page_html)
+
+        if not urls_with_params and not form_targets:
+            findings.append(self.finding(
+                title="No Parameters or Forms Found for XSS Testing",
+                severity="INFO",
+                description="No injectable parameters were found. XSS testing requires query parameters or HTML form fields.",
+                evidence={"target": self.ctx.target, "discovered_urls": len(self.ctx.discovered_urls)},
+                remediation="Crawl the target further or supply parameterized URLs for testing.",
+            ))
+            return findings
+
+        # Test URL parameters concurrently
+        semaphore = asyncio.Semaphore(3)
+        url_tasks = [
+            self._test_url_params(url, confirmed, csp_blocks_inline, semaphore)
+            for url in urls_with_params
         ]
+        url_results = await asyncio.gather(*url_tasks, return_exceptions=True)
+        for res in url_results:
+            if isinstance(res, list):
+                findings.extend(res)
 
-    def _check_dom_xss(self, html_content: str) -> list:
-        """Parses HTML and searches for potential DOM XSS sources and sinks."""
+        # Test form targets
+        form_tasks = [
+            self._test_form(form, confirmed, csp_blocks_inline, semaphore)
+            for form in form_targets
+        ]
+        form_results = await asyncio.gather(*form_tasks, return_exceptions=True)
+        for res in form_results:
+            if isinstance(res, list):
+                findings.extend(res)
+
+        self.log.info(
+            f"XSS scan complete: {len(findings)} findings "
+            f"(Playwright={'available' if _PLAYWRIGHT_AVAILABLE else 'not installed'})"
+        )
+        return findings
+
+    def _csp_blocks_inline(self, csp: str) -> bool:
+        """Return True if CSP restricts inline script execution."""
+        if not csp:
+            return False
+        csp_lower = csp.lower()
+        if "'unsafe-inline'" in csp_lower:
+            return False  # unsafe-inline means CSP permits inline scripts
+        return "script-src" in csp_lower or "default-src" in csp_lower
+
+    def _check_dom_xss(self, page_url: str, html_content: str, csp_blocks: bool) -> List[Finding]:
+        """Static analysis for DOM XSS source/sink flows in <script> blocks."""
         dom_findings = []
-        soup = BeautifulSoup(html_content, "html.parser")
-        
-        # Search all scripts
-        scripts = soup.find_all("script")
-        
-        dangerous_sinks = ["innerHTML", "document.write", "eval", "setTimeout", "setInterval", "location.href"]
-        dangerous_sources = ["location.hash", "location.search", "document.URL", "document.referrer"]
-        
+        try:
+            soup = BeautifulSoup(html_content, "html.parser")
+            scripts = soup.find_all("script")
+        except Exception:
+            return []
+
+        seen_keys: Set[tuple] = set()
         for idx, script in enumerate(scripts):
             script_text = script.string or ""
-            found_sources = [src for src in dangerous_sources if src in script_text]
-            found_sinks = [sink for sink in dangerous_sinks if sink in script_text]
-            
-            if found_sources and found_sinks:
-                dom_findings.append({
-                    "context": f"Script block {idx + 1}",
+            found_sources = [s for s in DOM_SOURCES if s in script_text]
+            found_sinks = [s for s in DOM_SINKS if s in script_text]
+            if not (found_sources and found_sinks):
+                continue
+
+            key = (tuple(sorted(found_sources)), tuple(sorted(found_sinks)))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            severity = "INFO" if csp_blocks else "MEDIUM"
+            mitigation = " (Mitigated by CSP)" if csp_blocks else ""
+            dom_findings.append(self.finding(
+                title=f"Potential DOM-Based XSS{mitigation}",
+                severity=severity,
+                description=(
+                    f"Client-side JavaScript uses dangerous sources ({', '.join(found_sources)}) "
+                    f"flowing to dangerous sinks ({', '.join(found_sinks)}). "
+                    + ("CSP headers may block exploitation." if csp_blocks
+                       else "This pattern enables DOM-based XSS attacks.")
+                ),
+                evidence={
+                    "page_url": page_url,
+                    "script_block": idx + 1,
                     "sources": found_sources,
                     "sinks": found_sinks,
-                    "snippet": script_text[:200]
-                })
+                    "snippet": script_text[:300],
+                    "csp_present": csp_blocks,
+                },
+                remediation=(
+                    "Avoid using innerHTML/eval with user-controlled data. "
+                    "Use DOMPurify for sanitization. Set a strict Content-Security-Policy."
+                ),
+                target=page_url,
+                tags=["xss", "dom-based"],
+            ))
         return dom_findings
 
-    def _is_html_encoded(self, payload: str, response_text: str) -> bool:
-        """Checks if the payload appears in the response only in HTML-encoded form.
-        
-        Returns True if an HTML-encoded version of the payload (e.g., &lt;script&gt;)
-        is present but the raw payload is NOT — meaning the server safely encoded it.
-        """
-        # Build the HTML-escaped version of the payload
-        escaped_payload = html.escape(payload, quote=True)
-        # Only relevant if the escaped form differs from the raw payload
-        if escaped_payload == payload:
-            return False
-        # Check if the escaped form appears in the response
-        return escaped_payload in response_text
-
-    def scan(self, progress_callback=None) -> dict:
-        findings = []
-        
-        try:
-            baseline = make_web_request(self.url, timeout=self.timeout)
-            baseline_html = baseline.text
-        except Exception as e:
-            return {
-                "error": f"Failed to connect to target to scan XSS: {str(e)}",
-                "findings": []
-            }
-            
-        # Parse DOM XSS threats first (on the root page)
-        dom_threats = self._check_dom_xss(baseline_html)
-        seen_targets = set()
-        for dt in dom_threats:
-            seen_targets.add((self.url, "dom", dt["context"]))
-            findings.append({
-                "module": "XSS Scanner",
-                "target": self.url,
-                "severity": "MEDIUM",
-                "title": "Potential DOM-Based XSS Detected",
-                "description": f"The client-side JavaScript utilizes dynamic sources ({', '.join(dt['sources'])}) and outputs to dangerous sinks ({', '.join(dt['sinks'])}) which can facilitate DOM-based Cross-Site Scripting.",
-                "evidence": f"Location: {dt['context']}\nSources found: {dt['sources']}\nSinks found: {dt['sinks']}\nSnippet: {dt['snippet']}",
-                "remediation": "Avoid using dangerous sinks like innerHTML or eval. Use safe alternatives such as textContent or innerText, and implement robust sanitization using libraries like DOMPurify."
-            })
-
-        # Run Crawler (pass make_web_request to enable mocking in tests)
-        crawler = Crawler(self.url, timeout=self.timeout, make_request_fn=make_web_request)
-        try:
-            crawl_results = crawler.crawl()
-            urls_with_params = crawl_results["urls_with_params"]
-            form_targets = crawl_results["form_targets"]
-            all_pages_html = crawl_results.get("all_pages_html", {})
-        except Exception:
-            urls_with_params = []
-            form_targets = []
-            all_pages_html = {}
-
-        # Loop over every (url, html) pair in crawl_result["all_pages_html"]
-        for page_url, page_html in all_pages_html.items():
-            # Skip it if it's the root URL (already checked earlier)
-            if page_url == self.url:
-                continue
-
-            page_dom_threats = self._check_dom_xss(page_html)
-            for dt in page_dom_threats:
-                dedup_key = (page_url, "dom", dt["context"])
-                if dedup_key in seen_targets:
-                    continue
-                seen_targets.add(dedup_key)
-
-                findings.append({
-                    "module": "XSS Scanner",
-                    "target": page_url,
-                    "severity": "MEDIUM",
-                    "title": "Potential DOM-Based XSS Detected",
-                    "description": f"The client-side JavaScript utilizes dynamic sources ({', '.join(dt['sources'])}) and outputs to dangerous sinks ({', '.join(dt['sinks'])}) which can facilitate DOM-based Cross-Site Scripting.",
-                    "evidence": f"Page URL: {page_url}\nLocation: {dt['context']}\nSources found: {dt['sources']}\nSinks found: {dt['sinks']}\nSnippet: {dt['snippet']}",
-                    "remediation": "Avoid using dangerous sinks like innerHTML or eval. Use safe alternatives such as textContent or innerText, and implement robust sanitization using libraries like DOMPurify."
-                })
-
-        # Calculate total steps across all targets
-        total_steps = 0
-        for u in urls_with_params:
+    def _extract_forms(self, all_page_html: Dict[str, str]) -> List[Dict]:
+        """Extract all HTML forms from crawled pages."""
+        forms = []
+        for page_url, html_content in all_page_html.items():
             try:
-                p_url = urllib.parse.urlparse(u)
-                p = urllib.parse.parse_qs(p_url.query)
-                total_steps += len(p) * len(self.payloads)
-            except Exception:
-                pass
-        for form in form_targets:
-            total_steps += len(form["fields"]) * len(self.payloads)
-
-        if total_steps == 0:
-            # No parameters or forms to test — log INFO and skip gracefully
-            findings.append({
-                "module": "XSS Scanner",
-                "target": self.url,
-                "severity": "INFO",
-                "title": "No URL Parameters Found to Test",
-                "description": "The target URL does not contain any query string parameters. Reflected XSS testing requires injectable parameters.",
-                "evidence": f"URL: {self.url}\nQuery string: (empty)",
-                "remediation": "Provide a URL with query parameters (e.g., ?search=term) for reflected XSS testing."
-            })
-            if progress_callback:
-                progress_callback(1, 1)
-            return {
-                "target": self.url,
-                "findings": findings
-            }
-
-        current_step = 0
-        confirmed_findings = set()  # Keyed by (endpoint, param)
-
-        # 1. Test Reflected XSS on GET parameters of URLs
-        for current_url in urls_with_params:
-            try:
-                parsed = urllib.parse.urlparse(current_url)
-                current_params = urllib.parse.parse_qs(parsed.query)
-                endpoint = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+                soup = BeautifulSoup(html_content, "html.parser")
+                for form in soup.find_all("form"):
+                    action = form.get("action", page_url) or page_url
+                    if not action.startswith("http"):
+                        action = urllib.parse.urljoin(page_url, action)
+                    method = (form.get("method") or "get").upper()
+                    fields = [
+                        inp.get("name")
+                        for inp in form.find_all(["input", "textarea"])
+                        if inp.get("name") and inp.get("type", "text") not in ("submit", "reset", "file", "hidden")
+                    ]
+                    if fields:
+                        forms.append({"action": action, "method": method, "fields": fields})
             except Exception:
                 continue
+        return forms
 
-            for param, values in current_params.items():
-                if (endpoint, param) in confirmed_findings:
-                    current_step += len(self.payloads)
-                    if progress_callback:
-                        progress_callback(current_step, total_steps)
+    async def _test_url_params(
+        self, url: str, confirmed: Set, csp_blocks: bool, semaphore: asyncio.Semaphore
+    ) -> List[Finding]:
+        """Test all URL parameters for reflected XSS."""
+        async with semaphore:
+            findings = []
+            try:
+                parsed = urllib.parse.urlparse(url)
+                params = urllib.parse.parse_qs(parsed.query)
+            except Exception:
+                return []
+
+            for param_name in params:
+                endpoint = urllib.parse.urlunparse(
+                    (parsed.scheme, parsed.netloc, parsed.path, "", "", "")
+                )
+                key = (endpoint, param_name)
+                if key in confirmed:
                     continue
 
-                for payload in self.payloads:
-                    current_step += 1
-                    if progress_callback:
-                        progress_callback(current_step, total_steps)
+                result = await self._test_reflection(
+                    url, parsed, params, param_name, "GET", None, csp_blocks
+                )
+                if result:
+                    confirmed.add(key)
+                    findings.append(result)
+                    # Check stored XSS
+                    stored = await self._check_stored_xss(url, result)
+                    if stored:
+                        findings.append(stored)
+            return findings
 
-                    test_params = current_params.copy()
-                    test_params[param] = [payload]
-
-                    query = urllib.parse.urlencode(test_params, doseq=True)
-                    test_url = parsed._replace(query=query).geturl()
-
-                    try:
-                        res = make_web_request(test_url, timeout=self.timeout)
-                        if not res:
-                            continue
-
-                        if payload in res.text:
-                            confirmed_findings.add((endpoint, param))
-                            findings.append({
-                                "module": "XSS Scanner",
-                                "target": test_url,
-                                "severity": "HIGH",
-                                "title": "Reflected Cross-Site Scripting (XSS) Vulnerability",
-                                "description": f"The application reflects untrusted input parameter '{param}' directly back into the response without sanitization or HTML encoding.",
-                                "evidence": f"Endpoint: {endpoint}\nMethod: GET\nParameter: {param}\nPayload: {payload}\nReflected in response body: True",
-                                "remediation": "Apply context-aware output encoding to all dynamic values printed in HTML body, attributes, and scripts. Utilize Content-Security-Policy headers."
-                            })
-                            break
-
-                        elif self._is_html_encoded(payload, res.text):
-                            confirmed_findings.add((endpoint, param))
-                            findings.append({
-                                "module": "XSS Scanner",
-                                "target": test_url,
-                                "severity": "INFO",
-                                "title": "Payload Reflected but Safely Encoded",
-                                "description": f"The parameter '{param}' value is reflected in the response, but the server applies HTML encoding (e.g., &lt;script&gt; instead of <script>), neutralizing the XSS vector.",
-                                "evidence": f"Endpoint: {endpoint}\nMethod: GET\nParameter: {param}\nPayload: {payload}\nReflected as HTML-encoded: True",
-                                "remediation": "No immediate action required. The server correctly encodes reflected input. Continue to verify encoding is applied consistently across all contexts."
-                            })
-                            break
-
-                    except Exception:
-                        pass
-
-        # 2. Test Reflected XSS on HTML form fields (GET and POST)
-        for form in form_targets:
+    async def _test_form(
+        self, form: Dict, confirmed: Set, csp_blocks: bool, semaphore: asyncio.Semaphore
+    ) -> List[Finding]:
+        """Test an HTML form for reflected XSS."""
+        async with semaphore:
+            findings = []
             action = form["action"]
             method = form["method"]
             fields = form["fields"]
 
-            try:
-                parsed_action = urllib.parse.urlparse(action)
-                endpoint = urllib.parse.urlunparse((parsed_action.scheme, parsed_action.netloc, parsed_action.path, '', '', ''))
-            except Exception:
-                endpoint = action
-
-            for param in fields:
-                if (endpoint, param) in confirmed_findings:
-                    current_step += len(self.payloads)
-                    if progress_callback:
-                        progress_callback(current_step, total_steps)
+            for param_name in fields:
+                try:
+                    parsed = urllib.parse.urlparse(action)
+                    endpoint = urllib.parse.urlunparse(
+                        (parsed.scheme, parsed.netloc, parsed.path, "", "", "")
+                    )
+                except Exception:
                     continue
 
-                for payload in self.payloads:
-                    current_step += 1
-                    if progress_callback:
-                        progress_callback(current_step, total_steps)
+                key = (endpoint, param_name)
+                if key in confirmed:
+                    continue
 
-                    # Build form data: set target parameter to payload, others to "test"
-                    form_data = {f: "test" for f in fields}
-                    form_data[param] = payload
+                base_data = {f: "test" for f in fields}
+                result = await self._test_reflection(
+                    action,
+                    urllib.parse.urlparse(action),
+                    {f: ["test"] for f in fields},
+                    param_name,
+                    method,
+                    base_data,
+                    csp_blocks,
+                )
+                if result:
+                    confirmed.add(key)
+                    findings.append(result)
+            return findings
 
-                    try:
-                        if method == "POST":
-                            target_url = action
-                            res = make_web_request(action, method="POST", data=form_data, timeout=self.timeout)
-                        else:  # GET
-                            query = urllib.parse.urlencode(form_data, doseq=True)
-                            target_url = parsed_action._replace(query=query).geturl()
-                            res = make_web_request(target_url, method="GET", timeout=self.timeout)
+    async def _test_reflection(
+        self,
+        url: str,
+        parsed,
+        params: dict,
+        param_name: str,
+        method: str,
+        base_data: Optional[Dict],
+        csp_blocks: bool,
+    ) -> Optional[Finding]:
+        """Test a single parameter for XSS reflection across all context-specific payloads."""
+        for context, payload, payload_desc in XSS_PAYLOADS:
+            test_params = {k: v[0] if isinstance(v, list) else v for k, v in params.items()}
+            test_params[param_name] = payload
 
-                        if not res:
-                            continue
+            if method == "POST" and base_data is not None:
+                resp = await self.post(url, data={**base_data, param_name: payload})
+                target_url = url
+            else:
+                query = urllib.parse.urlencode(test_params)
+                target_url = parsed._replace(query=query).geturl()
+                resp = await self.get(target_url)
 
-                        if payload in res.text:
-                            confirmed_findings.add((endpoint, param))
-                            findings.append({
-                                "module": "XSS Scanner",
-                                "target": target_url,
-                                "severity": "HIGH",
-                                "title": "Reflected Cross-Site Scripting (XSS) Vulnerability",
-                                "description": f"The application reflects untrusted input parameter '{param}' directly back into the response without sanitization or HTML encoding.",
-                                "evidence": f"Endpoint: {endpoint}\nMethod: {method}\nParameter: {param}\nPayload: {payload}\nReflected in response body: True",
-                                "remediation": "Apply context-aware output encoding to all dynamic values printed in HTML body, attributes, and scripts. Utilize Content-Security-Policy headers."
-                            })
-                            break
+            if resp is None:
+                continue
 
-                        elif self._is_html_encoded(payload, res.text):
-                            confirmed_findings.add((endpoint, param))
-                            findings.append({
-                                "module": "XSS Scanner",
-                                "target": target_url,
-                                "severity": "INFO",
-                                "title": "Payload Reflected but Safely Encoded",
-                                "description": f"The parameter '{param}' value is reflected in the response, but the server applies HTML encoding (e.g., &lt;script&gt; instead of <script>), neutralizing the XSS vector.",
-                                "evidence": f"Endpoint: {endpoint}\nMethod: {method}\nParameter: {param}\nPayload: {payload}\nReflected as HTML-encoded: True",
-                                "remediation": "No immediate action required. The server correctly encodes reflected input. Continue to verify encoding is applied consistently across all contexts."
-                            })
-                            break
+            # Check for safe HTML encoding (not a vuln)
+            escaped = html_module.escape(payload, quote=True)
+            if escaped != payload and escaped in resp.text and payload not in resp.text:
+                # Safely encoded — report as INFO and stop testing this param
+                return self.finding(
+                    title="XSS Payload Reflected but Safely Encoded",
+                    severity="INFO",
+                    description=(
+                        f"Parameter '{param_name}' reflects user input in HTML-encoded form. "
+                        f"The server applies HTML encoding (e.g. &lt;script&gt;), neutralizing the XSS vector."
+                    ),
+                    evidence={
+                        "url": target_url,
+                        "parameter": param_name,
+                        "payload": payload,
+                        "encoded_form": escaped[:100],
+                    },
+                    remediation="Verify encoding is applied consistently across all output contexts.",
+                    target=target_url,
+                    tags=["xss", "reflected", "mitigated"],
+                )
 
-                    except Exception:
-                        pass
+            # Raw reflection check
+            if payload in resp.text:
+                severity = "HIGH"
+                verified = True
+                mitigation_note = ""
 
-        if progress_callback:
-            progress_callback(total_steps, total_steps)
+                if csp_blocks:
+                    severity = "MEDIUM"
+                    verified = False
+                    mitigation_note = " (CSP may prevent execution)"
 
-        return {
-            "target": self.url,
-            "findings": findings
-        }
+                # Optional Playwright verification
+                if _PLAYWRIGHT_AVAILABLE and not csp_blocks:
+                    executed = await self._verify_with_playwright(target_url, payload)
+                    if executed is True:
+                        severity = "CRITICAL"
+                        verified = True
+                    elif executed is False:
+                        severity = "MEDIUM"
+                        mitigation_note = " (Payload reflected but not executed in browser)"
 
-Class = XSSScanner
+                return self.finding(
+                    title=f"Reflected XSS{mitigation_note}",
+                    severity=severity,
+                    description=(
+                        f"Parameter '{param_name}' reflects untrusted input without sanitization. "
+                        f"Context: {context}. Payload: {payload_desc}.{mitigation_note}"
+                    ),
+                    evidence={
+                        "url": target_url,
+                        "method": method,
+                        "parameter": param_name,
+                        "payload": payload,
+                        "context": context,
+                        "payload_description": payload_desc,
+                        "csp_present": csp_blocks,
+                        "playwright_verified": _PLAYWRIGHT_AVAILABLE and not csp_blocks,
+                    },
+                    remediation=(
+                        "Apply context-aware HTML encoding to all dynamic output. "
+                        "Implement a Content-Security-Policy that blocks unsafe-inline scripts."
+                    ),
+                    target=target_url,
+                    verified=verified,
+                    tags=["xss", "reflected", context],
+                )
+        return None
+
+    async def _check_stored_xss(self, original_url: str, reflected: Finding) -> Optional[Finding]:
+        """Re-fetch the page without payload to detect stored XSS persistence."""
+        payload = reflected.evidence.get("payload", "")
+        if not payload:
+            return None
+        await asyncio.sleep(0.5)
+        resp = await self.get(original_url)
+        if resp and payload in resp.text:
+            return self.finding(
+                title="Stored (Persistent) XSS Detected",
+                severity="CRITICAL",
+                description=(
+                    "The XSS payload persists in server responses on subsequent page loads, "
+                    "indicating stored XSS. Every user visiting the page is affected."
+                ),
+                evidence={
+                    "original_url": original_url,
+                    "payload": payload,
+                    "persistence_confirmed": True,
+                },
+                remediation=(
+                    "Critical: Stored XSS must be fixed immediately. "
+                    "Sanitize all stored user input before rendering. Clear cached payloads."
+                ),
+                target=original_url,
+                verified=True,
+                cvss_score=9.3,
+                tags=["xss", "stored", "critical"],
+            )
+        return None
+
+    async def _verify_with_playwright(self, url: str, payload: str) -> Optional[bool]:
+        """Use Playwright to verify if the XSS payload actually executes in a browser."""
+        if not _PLAYWRIGHT_AVAILABLE:
+            return None
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+                dialog_fired = [False]
+
+                async def handle_dialog(dialog):
+                    dialog_fired[0] = True
+                    await dialog.dismiss()
+
+                page.on("dialog", handle_dialog)
+                try:
+                    await page.goto(url, wait_until="networkidle", timeout=10000)
+                    await asyncio.sleep(1)
+                except Exception:
+                    pass
+                finally:
+                    await browser.close()
+                return dialog_fired[0]
+        except Exception as exc:
+            self.log.debug(f"Playwright verification error: {exc}")
+            return None
