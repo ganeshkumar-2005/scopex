@@ -72,7 +72,14 @@ class SubdomainScanner(BaseScanner):
         try:
             ip = await loop.run_in_executor(None, socket.gethostbyname, wildcard_host)
             return ip  # Wildcard detected
-        except Exception:
+        except socket.gaierror as e:
+            self.add_error("Subdomain Wildcard Check socket.gaierror", e)
+            return ""
+        except socket.error as e:
+            self.add_error("Subdomain Wildcard Check socket.error", e)
+            return ""
+        except Exception as e:
+            self.add_error("Subdomain Wildcard Check Generic Exception", e)
             return ""
 
     # ------------------------------------------------------------------
@@ -96,8 +103,12 @@ class SubdomainScanner(BaseScanner):
                     return result  # Same as wildcard — likely false positive
                 result["resolved"] = True
                 result["ip"] = ip
-            except Exception:
-                pass
+            except socket.gaierror as e:
+                self.add_error(f"Subdomain Resolution socket.gaierror {subdomain_url}", e)
+            except socket.error as e:
+                self.add_error(f"Subdomain Resolution socket.error {subdomain_url}", e)
+            except Exception as e:
+                self.add_error(f"Subdomain Resolution Generic Exception {subdomain_url}", e)
         return result
 
     # ------------------------------------------------------------------

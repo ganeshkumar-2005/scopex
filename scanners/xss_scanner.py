@@ -161,7 +161,9 @@ class XSSScanner(BaseScanner):
         try:
             soup = BeautifulSoup(html_content, "html.parser")
             scripts = soup.find_all("script")
-        except Exception:
+        except Exception as e:
+            self.log.debug(f"DOM XSS BeautifulSoup parsing failed: {e}")
+            self.add_error("XSS DOM Scanner HTML Parse", e)
             return []
 
         seen_keys: Set[tuple] = set()
@@ -223,7 +225,9 @@ class XSSScanner(BaseScanner):
                     ]
                     if fields:
                         forms.append({"action": action, "method": method, "fields": fields})
-            except Exception:
+            except Exception as e:
+                self.log.debug(f"XSS Form Extraction parsing failed: {e}")
+                self.add_error("XSS Form Extraction HTML Parse", e)
                 continue
         return forms
 
@@ -236,7 +240,11 @@ class XSSScanner(BaseScanner):
             try:
                 parsed = urllib.parse.urlparse(url)
                 params = urllib.parse.parse_qs(parsed.query)
-            except Exception:
+            except ValueError as e:
+                self.add_error("XSS URL Parameter Parse ValueError", e)
+                return []
+            except Exception as e:
+                self.add_error("XSS URL Parameter Parse Generic Exception", e)
                 return []
 
             for param_name in params:
@@ -275,7 +283,11 @@ class XSSScanner(BaseScanner):
                     endpoint = urllib.parse.urlunparse(
                         (parsed.scheme, parsed.netloc, parsed.path, "", "", "")
                     )
-                except Exception:
+                except ValueError as e:
+                    self.add_error("XSS Form Action Parse ValueError", e)
+                    continue
+                except Exception as e:
+                    self.add_error("XSS Form Action Parse Generic Exception", e)
                     continue
 
                 key = (endpoint, param_name)
@@ -344,16 +356,16 @@ class XSSScanner(BaseScanner):
                     target=target_url,
                     tags=["xss", "reflected", "mitigated"],
                 )
-
             # Raw reflection check
             if payload in resp.text:
                 severity = "HIGH"
                 verified = True
+                verification_method = "unverified"
                 mitigation_note = ""
 
                 if csp_blocks:
-                    severity = "MEDIUM"
                     verified = False
+                    verification_method = "csp_present"
                     mitigation_note = " (CSP may prevent execution)"
 
                 # Optional Playwright verification
@@ -362,8 +374,12 @@ class XSSScanner(BaseScanner):
                     if executed is True:
                         severity = "CRITICAL"
                         verified = True
+                        verification_method = "browser_confirmed_execution"
+                        mitigation_note = " (Browser Verified)"
                     elif executed is False:
                         severity = "MEDIUM"
+                        verified = False
+                        verification_method = "browser_confirmed_no_execution"
                         mitigation_note = " (Payload reflected but not executed in browser)"
 
                 return self.finding(
@@ -389,6 +405,7 @@ class XSSScanner(BaseScanner):
                     ),
                     target=target_url,
                     verified=verified,
+                    verification_method=verification_method,
                     tags=["xss", "reflected", context],
                 )
         return None
@@ -442,8 +459,9 @@ class XSSScanner(BaseScanner):
                 try:
                     await page.goto(url, wait_until="networkidle", timeout=10000)
                     await asyncio.sleep(1)
-                except Exception:
-                    pass
+                except Exception as e:
+                    self.log.debug(f"Playwright navigation failed inside browser context: {e}")
+                    self.ctx.add_scan_error("XSS Playwright Page Navigation", url, str(e))
                 finally:
                     await browser.close()
                 return dialog_fired[0]

@@ -178,7 +178,9 @@ def generate_pdf_report(scan_results: dict, output_filepath: str):
             # Print finding title
             pdf.set_text_color(30, 41, 59)
             pdf.set_font("Helvetica", "B", 11)
-            pdf.cell(0, 8, f"{finding_num}. [{severity}] {title}", new_x="LMARGIN", new_y="NEXT")
+            ver_method = f.get("verification_method", "unverified")
+            ver_suffix = f" ({ver_method})" if ver_method != "unverified" else ""
+            pdf.cell(0, 8, f"{finding_num}. [{severity}{ver_suffix}] {title}", new_x="LMARGIN", new_y="NEXT")
 
             # Module
             draw_field("Audit Module:", f.get("module", "General"))

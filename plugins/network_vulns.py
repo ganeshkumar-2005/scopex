@@ -104,8 +104,10 @@ class NetworkVulnPlugin(BasePlugin):
 
                 offset += rr_rdlength
 
-        except Exception:
-            pass
+        except (struct.error, IndexError) as e:
+            self.add_error("DNS Response Parse Struct/Index Error", e)
+        except Exception as e:
+            self.add_error("DNS Response Parse Generic Exception", e)
 
         return nameservers if nameservers else [self.host]
 
@@ -139,8 +141,10 @@ class NetworkVulnPlugin(BasePlugin):
                     label = data[offset:offset + length].decode("ascii", errors="replace")
                     labels.append(label)
                     offset += length
-        except Exception:
-            pass
+        except (struct.error, IndexError) as e:
+            self.add_error("DNS Name Read Struct/Index Error", e)
+        except Exception as e:
+            self.add_error("DNS Name Read Generic Exception", e)
         return ".".join(labels)
 
     # ------------------------------------------------------------------
@@ -166,8 +170,11 @@ class NetworkVulnPlugin(BasePlugin):
             # Resolve the NS hostname to an IP so we can connect
             try:
                 ns_ip = socket.gethostbyname(ns)
-            except Exception:
-                # If resolution fails, skip this nameserver
+            except socket.gaierror as e:
+                self.add_error(f"DNS AXFR Hostname Resolution socket.gaierror {ns}", e)
+                continue
+            except Exception as e:
+                self.add_error(f"DNS AXFR Hostname Resolution Generic Exception {ns}", e)
                 continue
 
             try:
@@ -214,7 +221,14 @@ class NetworkVulnPlugin(BasePlugin):
                                 )
                                 # One successful transfer is enough to report
                                 return
-            except Exception:
+            except socket.error as e:
+                self.add_error(f"DNS AXFR Query socket.error {ns}", e)
+                continue
+            except (struct.error, IndexError) as e:
+                self.add_error(f"DNS AXFR Response Struct/Index Error {ns}", e)
+                continue
+            except Exception as e:
+                self.add_error(f"DNS AXFR Query Generic Exception {ns}", e)
                 continue
 
     # ------------------------------------------------------------------
@@ -285,8 +299,10 @@ class NetworkVulnPlugin(BasePlugin):
                             remediation="Disable SNMP if not needed, or change default community string to a strong, secret value.",
                             cvss=info["cvss"]
                         )
-            except Exception:
-                pass
+            except socket.error as e:
+                self.add_error(f"SNMP Probe socket.error {community}", e)
+            except Exception as e:
+                self.add_error(f"SNMP Probe Generic Exception {community}", e)
 
     # ------------------------------------------------------------------
     # SMB
@@ -327,8 +343,12 @@ class NetworkVulnPlugin(BasePlugin):
                             remediation="Enable SMB signing policy: 'Microsoft network server: Digitally sign communications (always)'.",
                             cvss=5.3
                         )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("SMB Signing Probe socket.error", e)
+        except (struct.error, IndexError) as e:
+            self.add_error("SMB Signing Response Struct/Index Error", e)
+        except Exception as e:
+            self.add_error("SMB Signing Probe Generic Exception", e)
 
     # ------------------------------------------------------------------
     # NTP
@@ -352,8 +372,12 @@ class NetworkVulnPlugin(BasePlugin):
                         remediation="Disable monlist support by updating NTP daemon config or restricting access via firewall.",
                         cvss=5.3
                     )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("NTP Amplification Probe socket.error", e)
+        except struct.error as e:
+            self.add_error("NTP Amplification Response struct.error", e)
+        except Exception as e:
+            self.add_error("NTP Amplification Probe Generic Exception", e)
 
     # ------------------------------------------------------------------
     # LDAP Anonymous Bind
@@ -425,8 +449,10 @@ class NetworkVulnPlugin(BasePlugin):
                         ),
                         cvss=7.5
                     )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("LDAP Anonymous Bind Probe socket.error", e)
+        except Exception as e:
+            self.add_error("LDAP Anonymous Bind Probe Generic Exception", e)
 
     @staticmethod
     def _parse_ldap_bind_result(data: bytes) -> int:
@@ -465,7 +491,11 @@ class NetworkVulnPlugin(BasePlugin):
             # Read resultCode value (usually 1 byte)
             result_code = int.from_bytes(data[offset:offset + rc_len], byteorder="big")
             return result_code
-        except Exception:
+        except (IndexError, ValueError) as e:
+            self.add_error("LDAP Bind Result Parser Index/Value Error", e)
+            return -1
+        except Exception as e:
+            self.add_error("LDAP Bind Result Parser Generic Exception", e)
             return -1
 
     @staticmethod
@@ -526,8 +556,10 @@ class NetworkVulnPlugin(BasePlugin):
                         remediation="Filter the database port to localhost or restrict connection access using network firewall rules.",
                         cvss=7.5
                     )
-            except Exception:
-                pass
+            except socket.error as e:
+                self.add_error(f"Exposed Database Probe socket.error {port}", e)
+            except Exception as e:
+                self.add_error(f"Exposed Database Probe Generic Exception {port}", e)
 
         # Redis — dedicated check with PING/PONG verification
         self._check_redis()
@@ -564,7 +596,11 @@ class NetworkVulnPlugin(BasePlugin):
 
             version_str = payload[1:nul_pos].decode("ascii", errors="replace")
             return f"MySQL version: {version_str} (protocol v{proto_version})"
-        except Exception:
+        except (struct.error, IndexError, ValueError) as e:
+            self.add_error("MySQL Greeting Parser Struct/Index/Value Error", e)
+            return ""
+        except Exception as e:
+            self.add_error("MySQL Greeting Parser Generic Exception", e)
             return ""
 
     def _check_redis(self):
@@ -606,5 +642,7 @@ class NetworkVulnPlugin(BasePlugin):
                         remediation="Filter the database port to localhost or restrict connection access using network firewall rules.",
                         cvss=7.5
                     )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("Redis Probe socket.error", e)
+        except Exception as e:
+            self.add_error("Redis Probe Generic Exception", e)

@@ -158,7 +158,11 @@ class SQLiScanner(BaseScanner):
             try:
                 parsed = urllib.parse.urlparse(url)
                 params = urllib.parse.parse_qs(parsed.query)
-            except Exception:
+            except ValueError as e:
+                self.add_error("SQLi URL Parse ValueError", e)
+                return []
+            except Exception as e:
+                self.add_error("SQLi URL Parse Generic Exception", e)
                 return []
 
             for param_name in params:

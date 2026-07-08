@@ -44,8 +44,9 @@ class Crawler:
                 action = form_tag['action']
                 self._process_link(url, action)
 
-        except Exception:
-            pass
+        except Exception as e:
+            from loguru import logger
+            logger.debug(f"[Utils Crawler _crawl_recursive] failed: {e}")
 
     def _process_link(self, base_url: str, link: str):
         full_url = urllib.parse.urljoin(base_url, link)

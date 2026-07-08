@@ -603,8 +603,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                         evidenceHtml = '<span style="color: var(--text-dim)">N/A</span>';
                     }
 
+                    const verMethod = f.verification_method || 'unverified';
+                    const verSuffix = verMethod !== 'unverified' ? ' (' + verMethod + ')' : '';
                     tr.innerHTML = `
-                        <td><span class="badge ${badgeClass}">${sev}</span></td>
+                        <td><span class="badge ${badgeClass}">${sev}${verSuffix}</span></td>
                         <td>
                             <div class="finding-title">${title}</div>
                             <div class="finding-target">${target}</div>

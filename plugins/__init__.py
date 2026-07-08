@@ -46,9 +46,10 @@ def discover_plugins() -> None:
                         "description": getattr(obj, "DESCRIPTION", obj.__doc__ or "").strip(),
                         "family": getattr(obj, "PLUGIN_FAMILY", "General"),
                     }
-        except Exception:
+        except Exception as e:
             # Suppress import issues during scanning to keep it robust
-            pass
+            from loguru import logger
+            logger.warning(f"Failed to dynamically import plugin {module_name}: {e}")
 
 
 # Automatically discover on package import

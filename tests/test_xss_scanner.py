@@ -53,12 +53,16 @@ async def test_xss_reflected_detection():
     # Baseline response, then for each discovered URL, then payload responses
     responses = [normal] * 2 + [reflected] * 20
     scanner = _make_scanner(ctx, responses)
-    findings = await scanner.scan()
+    
+    from unittest.mock import patch
+    with patch("scanners.xss_scanner._PLAYWRIGHT_AVAILABLE", False):
+        findings = await scanner.scan()
 
     xss_findings = [f for f in findings if "Reflected XSS" in f.title]
     assert len(xss_findings) >= 1
-    assert xss_findings[0].severity in ("HIGH", "CRITICAL")
+    assert xss_findings[0].severity == "HIGH"
     assert xss_findings[0].verified is True
+    assert xss_findings[0].verification_method == "unverified"
 
 
 @pytest.mark.asyncio
@@ -98,7 +102,7 @@ async def test_xss_dom_based_detection():
 
 @pytest.mark.asyncio
 async def test_xss_csp_mitigation():
-    """Reports lower severity when CSP blocks inline scripts."""
+    """Reports CSP presence but keeps severity HIGH per deterministic rules."""
     ctx = _ctx()
     csp_normal = _mock_response(
         "<html><body>Search</body></html>",
@@ -114,8 +118,8 @@ async def test_xss_csp_mitigation():
 
     reflected = [f for f in findings if "Reflected XSS" in f.title]
     assert len(reflected) >= 1
-    # CSP should downgrade severity
-    assert reflected[0].severity in ("MEDIUM", "LOW")
+    assert reflected[0].severity == "HIGH"
+    assert reflected[0].verification_method == "csp_present"
 
 
 @pytest.mark.asyncio
@@ -129,3 +133,70 @@ async def test_xss_findings_are_finding_objects():
     for f in findings:
         assert isinstance(f, Finding)
         assert f.module == "XSSScanner"
+
+
+@pytest.mark.asyncio
+async def test_xss_reflected_browser_confirmed_execution():
+    """Verify that browser-confirmed execution results in CRITICAL severity."""
+    ctx = _ctx()
+    normal = _mock_response("<html><body>Search results for: test</body></html>")
+    reflected = _mock_response('<html><body>Search results for: <img src=x onerror=alert(1)></body></html>')
+    responses = [normal] * 2 + [reflected] * 20
+    scanner = _make_scanner(ctx, responses)
+
+    from unittest.mock import patch, AsyncMock
+    with patch("scanners.xss_scanner._PLAYWRIGHT_AVAILABLE", True), \
+         patch.object(scanner, "_verify_with_playwright", new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = True
+        findings = await scanner.scan()
+
+    xss_findings = [f for f in findings if "Reflected XSS" in f.title]
+    assert len(xss_findings) >= 1
+    assert xss_findings[0].severity == "CRITICAL"
+    assert xss_findings[0].verified is True
+    assert xss_findings[0].verification_method == "browser_confirmed_execution"
+
+
+@pytest.mark.asyncio
+async def test_xss_reflected_browser_confirmed_no_execution():
+    """Verify that browser-confirmed no-execution results in MEDIUM severity."""
+    ctx = _ctx()
+    normal = _mock_response("<html><body>Search results for: test</body></html>")
+    reflected = _mock_response('<html><body>Search results for: <img src=x onerror=alert(1)></body></html>')
+    responses = [normal] * 2 + [reflected] * 20
+    scanner = _make_scanner(ctx, responses)
+
+    from unittest.mock import patch, AsyncMock
+    with patch("scanners.xss_scanner._PLAYWRIGHT_AVAILABLE", True), \
+         patch.object(scanner, "_verify_with_playwright", new_callable=AsyncMock) as mock_verify:
+        mock_verify.return_value = False
+        findings = await scanner.scan()
+
+    xss_findings = [f for f in findings if "Reflected XSS" in f.title]
+    assert len(xss_findings) >= 1
+    assert xss_findings[0].severity == "MEDIUM"
+    assert xss_findings[0].verified is False
+    assert xss_findings[0].verification_method == "browser_confirmed_no_execution"
+
+
+@pytest.mark.asyncio
+async def test_xss_reflected_csp_present_severity():
+    """Verify that CSP present results in HIGH severity but 'csp_present' verification method."""
+    ctx = _ctx()
+    csp_normal = _mock_response(
+        "<html><body>Search</body></html>",
+        headers={"content-security-policy": "script-src 'self'"}
+    )
+    csp_reflected = _mock_response(
+        '<html><body><img src=x onerror=alert(1)></body></html>',
+        headers={"content-security-policy": "script-src 'self'"}
+    )
+    responses = [csp_normal] * 2 + [csp_reflected] * 20
+    scanner = _make_scanner(ctx, responses)
+    findings = await scanner.scan()
+
+    reflected = [f for f in findings if "Reflected XSS" in f.title]
+    assert len(reflected) >= 1
+    assert reflected[0].severity == "HIGH"
+    assert reflected[0].verified is False
+    assert reflected[0].verification_method == "csp_present"

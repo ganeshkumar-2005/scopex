@@ -58,6 +58,12 @@ class Finding:
     tags: List[str] = field(default_factory=list)
     verified: bool = False          # True if exploitable, False if just detectable
     false_positive_risk: Literal["LOW", "MEDIUM", "HIGH"] = "LOW"
+    verification_method: Literal[
+        "unverified",
+        "csp_present",
+        "browser_confirmed_execution",
+        "browser_confirmed_no_execution"
+    ] = "unverified"
 
     # ------------------------------------------------------------------ #
     #  Validation                                                          #
@@ -95,6 +101,18 @@ class Finding:
                 f"got {self.false_positive_risk!r}"
             )
 
+        # verification_method allowed values
+        if self.verification_method not in (
+            "unverified",
+            "csp_present",
+            "browser_confirmed_execution",
+            "browser_confirmed_no_execution"
+        ):
+            raise ValueError(
+                f"verification_method must be unverified | csp_present | browser_confirmed_execution | browser_confirmed_no_execution, "
+                f"got {self.verification_method!r}"
+            )
+
     # ------------------------------------------------------------------ #
     #  Properties                                                          #
     # ------------------------------------------------------------------ #
@@ -125,6 +143,7 @@ class Finding:
             "tags": self.tags,
             "verified": self.verified,
             "false_positive_risk": self.false_positive_risk,
+            "verification_method": self.verification_method,
         }
 
     @classmethod

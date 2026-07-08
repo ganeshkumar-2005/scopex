@@ -174,7 +174,13 @@ class NucleiOrchestrator:
             try:
                 if any(templates_dir.iterdir()):
                     return
-            except Exception:
+            except (PermissionError, OSError) as e:
+                self.log.debug(f"Failed to read nuclei templates directory: {e}")
+                self.ctx.add_scan_error("Nuclei Templates Dir Read Error", str(templates_dir), str(e))
+                return
+            except Exception as e:
+                self.log.debug(f"Failed to check nuclei templates directory: {e}")
+                self.ctx.add_scan_error("Nuclei Templates Dir Check Generic Exception", str(templates_dir), str(e))
                 return
 
         self.log.info("Nuclei templates not found; downloading...")
@@ -256,8 +262,10 @@ class NucleiOrchestrator:
             try:
                 if temp_output.exists():
                     temp_output.unlink()
-            except Exception:
-                pass
+            except OSError as e:
+                self.log.debug(f"Failed to delete temp nuclei output file: {e}")
+            except Exception as e:
+                self.log.debug(f"Generic error deleting temp nuclei output file: {e}")
 
     def _parse_jsonl(self, output_file: Path) -> List[Finding]:
         """Parse Nuclei JSONL output file into Finding objects."""

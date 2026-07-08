@@ -40,8 +40,10 @@ class ServiceVulnPlugin(BasePlugin):
                                 remediation="Disable anonymous authentication in FTP daemon settings.",
                                 cvss=5.3
                             )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("Anonymous FTP Check socket.error", e)
+        except Exception as e:
+            self.add_error("Anonymous FTP Check Generic Exception", e)
 
     def check_ssh_weak_algos(self):
         """Heuristic check on SSH service on standard port 22.
@@ -87,8 +89,10 @@ class ServiceVulnPlugin(BasePlugin):
                                 )
                         except ValueError:
                             pass
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("SSH Protocol Version 1 Check socket.error", e)
+        except Exception as e:
+            self.add_error("SSH Protocol Version 1 Check Generic Exception", e)
 
     def check_smtp_open_relay(self):
         """Basic SMTP open relay test."""
@@ -111,8 +115,10 @@ class ServiceVulnPlugin(BasePlugin):
                             remediation="Configure the SMTP server to require authentication for relaying external mail.",
                             cvss=7.5
                         )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("SMTP Open Relay Check socket.error", e)
+        except Exception as e:
+            self.add_error("SMTP Open Relay Check Generic Exception", e)
 
     def check_mysql_no_auth(self):
         """Checks if MySQL database allows passwordless access.
@@ -180,8 +186,12 @@ class ServiceVulnPlugin(BasePlugin):
                             cve_id="CVE-1999-0508",
                             cvss=9.8
                         )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("MySQL Passwordless Root Check socket.error", e)
+        except struct.error as e:
+            self.add_error("MySQL Passwordless Root Response struct.error", e)
+        except Exception as e:
+            self.add_error("MySQL Passwordless Root Check Generic Exception", e)
 
     def check_redis_no_auth(self):
         """Checks if Redis database allows unauthenticated commands."""
@@ -198,8 +208,10 @@ class ServiceVulnPlugin(BasePlugin):
                         remediation="Enable authentication in redis.conf (requirepass) and bind Redis to local interfaces.",
                         cvss=9.8
                     )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("Redis Unauthenticated Access Check socket.error", e)
+        except Exception as e:
+            self.add_error("Redis Unauthenticated Access Check Generic Exception", e)
 
     def check_default_credentials(self):
         """Probes typical login/admin panels for default logins."""
@@ -242,5 +254,7 @@ class ServiceVulnPlugin(BasePlugin):
                                         cvss=9.8
                                     )
                                     return
-            except Exception:
-                pass
+            except httpx.RequestError as e:
+                self.add_error(f"Default Credentials Probe HTTP Request {endpoint}", e)
+            except Exception as e:
+                self.add_error(f"Default Credentials Probe Generic Exception {endpoint}", e)

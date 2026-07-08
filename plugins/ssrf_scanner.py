@@ -1,4 +1,5 @@
 import urllib.parse
+import httpx
 from .base_plugin import BasePlugin
 from utils.helpers import make_web_request
 
@@ -31,7 +32,11 @@ class SSRFPlugin(BasePlugin):
             try:
                 baseline_res = make_web_request(url, timeout=self.timeout)
                 baseline_text = baseline_res.text if baseline_res else ""
-            except Exception:
+            except httpx.RequestError as e:
+                self.add_error(f"SSRF Baseline Probe HTTP Request {url}", e)
+                continue
+            except Exception as e:
+                self.add_error(f"SSRF Baseline Probe Generic Exception {url}", e)
                 continue
 
             # If target has no query params, test typical endpoints/parameter names on target
@@ -69,8 +74,10 @@ class SSRFPlugin(BasePlugin):
                             cvss=7.5
                         )
                         break
-            except Exception:
-                pass
+            except httpx.RequestError as e:
+                self.add_error(f"SSRF Traversal Probe HTTP Request {test_url}", e)
+            except Exception as e:
+                self.add_error(f"SSRF Traversal Probe Generic Exception {test_url}", e)
 
         # 2. Null Byte Injection test
         null_byte_payloads = [
@@ -93,8 +100,10 @@ class SSRFPlugin(BasePlugin):
                             cvss=6.5
                         )
                         break
-            except Exception:
-                pass
+            except httpx.RequestError as e:
+                self.add_error(f"SSRF Null Byte Probe HTTP Request {test_url}", e)
+            except Exception as e:
+                self.add_error(f"SSRF Null Byte Probe Generic Exception {test_url}", e)
 
         # 3. SSRF Payloads
         ssrf_payloads = [
@@ -118,8 +127,10 @@ class SSRFPlugin(BasePlugin):
                             cvss=9.1
                         )
                         break
-            except Exception:
-                pass
+            except httpx.RequestError as e:
+                self.add_error(f"SSRF Target Connection Probe HTTP Request {test_url}", e)
+            except Exception as e:
+                self.add_error(f"SSRF Target Connection Probe Generic Exception {test_url}", e)
 
     def build_test_url(self, base_url: str, param: str, value: str) -> str:
         """Injects test value into URL query parameter."""

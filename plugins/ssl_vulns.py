@@ -43,8 +43,14 @@ class SSLVulnPlugin(BasePlugin):
                             cvss=3.4
                         )
                         return
-            except Exception:
-                # SSLv3 connection failed — server likely doesn't support it
+            except ssl.SSLError as e:
+                self.add_error("SSLv3 POODLE Probe ssl.SSLError", e)
+                return
+            except socket.error as e:
+                self.add_error("SSLv3 POODLE Probe socket.error", e)
+                return
+            except Exception as e:
+                self.add_error("SSLv3 POODLE Probe Generic Exception", e)
                 return
 
         # Attempt 2: PROTOCOL_SSLv3 not available (Python 3.10+), use raw socket probe
@@ -89,8 +95,10 @@ class SSLVulnPlugin(BasePlugin):
                         cve_ids=["CVE-2014-3566"],
                         cvss=3.4
                     )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("SSLv3 Raw ClientHello Probe socket.error", e)
+        except Exception as e:
+            self.add_error("SSLv3 Raw ClientHello Probe Generic Exception", e)
 
     def check_drown(self):
         """DROWN check: Tests if SSLv2 is enabled.
@@ -106,8 +114,12 @@ class SSLVulnPlugin(BasePlugin):
                     with context.wrap_socket(sock, server_hostname=self.host) as ssock:
                         self._add_drown_finding()
                         return
-            except Exception:
-                pass
+            except ssl.SSLError as e:
+                self.add_error("SSLv2 DROWN Probe ssl.SSLError", e)
+            except socket.error as e:
+                self.add_error("SSLv2 DROWN Probe socket.error", e)
+            except Exception as e:
+                self.add_error("SSLv2 DROWN Probe Generic Exception", e)
 
         # Primary approach: raw SSLv2 Client Hello probe
         self._check_ssl2_raw()
@@ -133,8 +145,10 @@ class SSLVulnPlugin(BasePlugin):
                 # If server responds with Server Hello (starts with Server Hello code or similar)
                 if len(resp) > 2 and resp[2] == 0x04: # SSLv2 Server Hello
                     self._add_drown_finding()
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("SSLv2 Raw ClientHello Probe socket.error", e)
+        except Exception as e:
+            self.add_error("SSLv2 Raw ClientHello Probe Generic Exception", e)
 
     def _add_drown_finding(self):
         self.add_finding(
@@ -241,8 +255,12 @@ class SSLVulnPlugin(BasePlugin):
                             cve_ids=["CVE-2015-0204"],
                             cvss=5.0
                         )
-        except Exception:
-            pass
+        except socket.error as e:
+            self.add_error("FREAK Raw ClientHello Probe socket.error", e)
+        except struct.error as e:
+            self.add_error("FREAK Raw ClientHello Response struct.error", e)
+        except Exception as e:
+            self.add_error("FREAK Raw ClientHello Probe Generic Exception", e)
 
     def check_heartbleed(self):
         """Heartbleed check (CVE-2014-0160).
@@ -366,9 +384,12 @@ class SSLVulnPlugin(BasePlugin):
                     cvss=7.5
                 )
 
-        except Exception:
-            # Connection failed, timed out, or server dropped — not vulnerable
-            pass
+        except socket.error as e:
+            self.add_error("Heartbleed Probe socket.error", e)
+        except struct.error as e:
+            self.add_error("Heartbleed Response struct.error", e)
+        except Exception as e:
+            self.add_error("Heartbleed Probe Generic Exception", e)
 
     def _recv_tls_handshake(self, sock: socket.socket) -> bool:
         """Reads TLS handshake records from the server after ClientHello.
@@ -413,7 +434,11 @@ class SSLVulnPlugin(BasePlugin):
                     # Unknown record type; keep reading
                     continue
 
-        except Exception:
+        except (socket.error, struct.error) as e:
+            self.add_error("Heartbleed Handshake Record Receive", e)
+            return False
+        except Exception as e:
+            self.add_error("Heartbleed Handshake Record Receive Generic", e)
             return False
 
     def _recv_heartbeat_response(self, sock: socket.socket) -> bool:
@@ -444,7 +469,11 @@ class SSLVulnPlugin(BasePlugin):
             # This means the server is patched / not vulnerable
             return False
 
-        except Exception:
+        except (socket.error, struct.error) as e:
+            self.add_error("Heartbleed Response Record Receive", e)
+            return False
+        except Exception as e:
+            self.add_error("Heartbleed Response Record Receive Generic", e)
             return False
 
     def _recv_exact(self, sock: socket.socket, length: int) -> bytes:
@@ -462,7 +491,11 @@ class SSLVulnPlugin(BasePlugin):
                     return None
                 data += chunk
                 remaining -= len(chunk)
-            except Exception:
+            except socket.error as e:
+                self.add_error("Heartbleed _recv_exact socket.error", e)
+                return None
+            except Exception as e:
+                self.add_error("Heartbleed _recv_exact Generic Exception", e)
                 return None
         return data
 
@@ -485,8 +518,12 @@ class SSLVulnPlugin(BasePlugin):
                             cve_ids=["CVE-2012-4929"],
                             cvss=3.7
                         )
-        except Exception:
-            pass
+        except ssl.SSLError as e:
+            self.add_error("TLS Compression Check ssl.SSLError", e)
+        except socket.error as e:
+            self.add_error("TLS Compression Check socket.error", e)
+        except Exception as e:
+            self.add_error("TLS Compression Check Generic Exception", e)
 
     def check_cert_transparency(self):
         """CT Check: Checks if certificate has CT SCT extension."""
@@ -511,5 +548,9 @@ class SSLVulnPlugin(BasePlugin):
                         remediation="Request certificate with Certificate Transparency (SCT) enabled from your CA.",
                         cvss=0.0
                     )
-        except Exception:
-            pass
+        except ssl.SSLError as e:
+            self.add_error("Cert Transparency Check ssl.SSLError", e)
+        except socket.error as e:
+            self.add_error("Cert Transparency Check socket.error", e)
+        except Exception as e:
+            self.add_error("Cert Transparency Check Generic Exception", e)

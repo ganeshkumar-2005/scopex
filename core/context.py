@@ -130,6 +130,7 @@ class ScanContext:
     discovered_subdomains: List[str] = field(default_factory=list)
     discovered_technologies: List[str] = field(default_factory=list)
     open_ports: List[int] = field(default_factory=list)
+    scan_errors: List[tuple] = field(default_factory=list)  # (check_name, target, error_summary)
     waf_detected: bool = False
     waf_vendor: Optional[str] = None
 
@@ -183,6 +184,13 @@ class ScanContext:
         with self._lock:
             if port not in self.open_ports:
                 self.open_ports.append(port)
+
+    def add_scan_error(self, check_name: str, target: str, error_summary: str) -> None:
+        """
+        Record a scan error. Thread-safe.
+        """
+        with self._lock:
+            self.scan_errors.append((check_name, target, error_summary))
 
     def set_waf(self, vendor: str) -> None:
         """

@@ -103,7 +103,11 @@ class CookieScanner(BaseScanner):
                 s += "=" * (4 - len(s) % 4)
                 return json.loads(base64.urlsafe_b64decode(s))
             return {"header": b64d(parts[0]), "payload": b64d(parts[1])}
-        except Exception:
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            self.add_error("JWT Payload Decoding Parse Error", e)
+            return None
+        except Exception as e:
+            self.add_error("JWT Payload Decoding Generic Exception", e)
             return None
 
     def _analyze_jwt(self, cookie_name: str, jwt_str: str) -> List[Finding]:
@@ -156,7 +160,11 @@ class CookieScanner(BaseScanner):
         try:
             sig_padded = sig_segment + "=" * (4 - len(sig_segment) % 4)
             expected_sig = base64.urlsafe_b64decode(sig_padded)
-        except Exception:
+        except ValueError as e:
+            self.add_error("JWT Weak Secret Decode ValueError", e)
+            return ""
+        except Exception as e:
+            self.add_error("JWT Weak Secret Decode Generic Exception", e)
             return ""
 
         for secret in _COMMON_JWT_SECRETS:

@@ -112,7 +112,13 @@ class AuthStateManager:
                 self.auth.authenticated = False
                 return False
             return True
-        except Exception:
+        except httpx.RequestError as e:
+            self.log.debug(f"Session validation HTTP request failed: {e}")
+            self.ctx.add_scan_error("Auth State Manager Session Validity Check HTTP Request", self.auth.login_url, str(e))
+            return False
+        except Exception as e:
+            self.log.debug(f"Session validation generic check failed: {e}")
+            self.ctx.add_scan_error("Auth State Manager Session Validity Check Generic Exception", self.auth.login_url, str(e))
             return False
 
     async def refresh_session(self) -> bool:

@@ -66,7 +66,8 @@ class InfoDisclosureScanner(BaseScanner):
                     remediation="Remove development comments and TODO markers from production builds.",
                     tags=["info-disclosure", "comments"],
                 ))
-        except Exception:
-            pass
+        except Exception as e:
+            self.log.debug(f"BeautifulSoup comments extraction failed: {e}")
+            self.add_error("Info Disclosure BeautifulSoup Comments Parse", e)
 
         return findings

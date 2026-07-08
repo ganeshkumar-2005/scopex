@@ -81,7 +81,11 @@ class SSLScanner(BaseScanner):
         try:
             not_before = datetime.strptime(not_before_str, "%b %d %H:%M:%S %Y %Z")
             not_after = datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z")
-        except Exception:
+        except ValueError as e:
+            self.add_error("SSL Certificate Date Parse ValueError", e)
+            not_before = not_after = datetime.now(timezone.utc)
+        except Exception as e:
+            self.add_error("SSL Certificate Date Parse Generic Exception", e)
             not_before = not_after = datetime.now(timezone.utc)
 
         now = datetime.now(timezone.utc).replace(tzinfo=None)

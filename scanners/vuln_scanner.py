@@ -67,7 +67,13 @@ class VulnScanner(BaseScanner):
                 "content_length": len(resp.content),
                 "key_phrases": key_phrases,
             }
-        except Exception:
+        except httpx.RequestError as e:
+            self.log.debug(f"Custom 404 calibration failed: {e}")
+            self.add_error("Custom 404 Calibration HTTP Request", e)
+            self._custom_404_fingerprint = None
+        except Exception as e:
+            self.log.debug(f"Custom 404 calibration failed: {e}")
+            self.add_error("Custom 404 Calibration Generic Exception", e)
             self._custom_404_fingerprint = None
 
     def _looks_like_custom_404(self, response: httpx.Response) -> bool:
@@ -278,7 +284,11 @@ class VulnScanner(BaseScanner):
             try:
                 parsed_base = urllib.parse.urlparse(base_url)
                 base_params = urllib.parse.parse_qs(parsed_base.query)
-            except Exception:
+            except ValueError as e:
+                self.add_error("Open Redirect URL Parse ValueError", e)
+                continue
+            except Exception as e:
+                self.add_error("Open Redirect URL Parse Generic Exception", e)
                 continue
 
             for param in redirect_params:
@@ -313,8 +323,10 @@ class VulnScanner(BaseScanner):
                                     tags=["open-redirect"],
                                 ))
                                 return
-                    except Exception:
-                        pass
+                    except httpx.RequestError as e:
+                        self.add_error("Open Redirect Probe HTTP Request", e)
+                    except Exception as e:
+                        self.add_error("Open Redirect Probe Generic Exception", e)
 
     # ------------------------------------------------------------------
     # Sensitive file probing
@@ -399,8 +411,10 @@ class VulnScanner(BaseScanner):
                     target=test_url,
                     tags=["sensitive-file", path.replace("/", "-").replace(".", "")],
                 ))
-            except Exception:
-                pass
+            except httpx.RequestError as e:
+                self.add_error(f"Sensitive File Probe HTTP Request {path}", e)
+            except Exception as e:
+                self.add_error(f"Sensitive File Probe Generic Exception {path}", e)
 
     # ------------------------------------------------------------------
     # Dangerous HTTP methods
@@ -422,8 +436,10 @@ class VulnScanner(BaseScanner):
                     remediation="Restrict HTTP methods in web server configurations. Disable PUT, DELETE, and TRACE.",
                     tags=["http-methods", "dangerous"],
                 ))
-        except Exception:
-            pass
+        except httpx.RequestError as e:
+            self.add_error("Dangerous HTTP Methods PUT Probe HTTP Request", e)
+        except Exception as e:
+            self.add_error("Dangerous HTTP Methods PUT Probe Generic Exception", e)
 
     # ------------------------------------------------------------------
     # CRLF injection
@@ -451,8 +467,10 @@ class VulnScanner(BaseScanner):
                     target=test_url,
                     tags=["crlf-injection"],
                 ))
-        except Exception:
-            pass
+        except httpx.RequestError as e:
+            self.add_error("CRLF Injection Probe HTTP Request", e)
+        except Exception as e:
+            self.add_error("CRLF Injection Probe Generic Exception", e)
 
     # ------------------------------------------------------------------
     # Host header injection
@@ -479,8 +497,10 @@ class VulnScanner(BaseScanner):
                         ),
                         tags=["host-header-injection"],
                     ))
-        except Exception:
-            pass
+        except httpx.RequestError as e:
+            self.add_error("Host Header Injection Probe HTTP Request", e)
+        except Exception as e:
+            self.add_error("Host Header Injection Probe Generic Exception", e)
 
     # ------------------------------------------------------------------
     # security.txt compliance check
@@ -511,7 +531,11 @@ class VulnScanner(BaseScanner):
                             found_url = url
                             body = resp.text
                             break
-            except Exception:
+            except httpx.RequestError as e:
+                self.add_error(f"Security.txt Probe HTTP Request {path}", e)
+                continue
+            except Exception as e:
+                self.add_error(f"Security.txt Probe Generic Exception {path}", e)
                 continue
 
         if not found:

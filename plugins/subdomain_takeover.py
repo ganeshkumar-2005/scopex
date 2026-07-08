@@ -1,4 +1,5 @@
 import socket
+import httpx
 from .base_plugin import BasePlugin
 from utils.helpers import make_web_request
 
@@ -38,15 +39,30 @@ class SubdomainTakeoverPlugin(BasePlugin):
             res = make_web_request(url, timeout=self.timeout)
             if res:
                 self.fingerprint_response(subdomain, res.text)
-        except Exception:
+        except httpx.RequestError as e:
+            self.add_error(f"Subdomain Takeover HTTPS Probe HTTP Request {subdomain}", e)
             # If HTTPS fails, try HTTP
             try:
                 url = f"http://{subdomain}"
                 res = make_web_request(url, timeout=self.timeout)
                 if res:
                     self.fingerprint_response(subdomain, res.text)
-            except Exception:
-                pass
+            except httpx.RequestError as e_http:
+                self.add_error(f"Subdomain Takeover HTTP Probe HTTP Request {subdomain}", e_http)
+            except Exception as e_http:
+                self.add_error(f"Subdomain Takeover HTTP Probe Generic Exception {subdomain}", e_http)
+        except Exception as e:
+            self.add_error(f"Subdomain Takeover HTTPS Probe Generic Exception {subdomain}", e)
+            # If HTTPS fails, try HTTP
+            try:
+                url = f"http://{subdomain}"
+                res = make_web_request(url, timeout=self.timeout)
+                if res:
+                    self.fingerprint_response(subdomain, res.text)
+            except httpx.RequestError as e_http:
+                self.add_error(f"Subdomain Takeover HTTP Probe HTTP Request {subdomain}", e_http)
+            except Exception as e_http:
+                self.add_error(f"Subdomain Takeover HTTP Probe Generic Exception {subdomain}", e_http)
 
     def fingerprint_response(self, subdomain: str, body: str):
         """Matches response bodies to known cloud service error signatures."""

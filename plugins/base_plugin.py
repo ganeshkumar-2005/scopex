@@ -35,6 +35,7 @@ class BasePlugin(ABC):
         self.target = target
         self.timeout = timeout
         self.findings: List[Finding] = []
+        self.plugin_errors: List[tuple] = []
 
         # Normalize target
         if "://" in target:
@@ -46,6 +47,14 @@ class BasePlugin(ABC):
             self.url = f"https://{target}"
         else:
             self.url = target
+
+    def add_error(self, check_name: str, error: Exception) -> None:
+        """Log a check failure and register it in plugin_errors."""
+        from loguru import logger
+        log = logger.bind(scanner=self.__class__.__name__)
+        err_msg = str(error)
+        log.debug(f"[{check_name}] failed for {self.target}: {err_msg}")
+        self.plugin_errors.append((check_name, self.target, err_msg))
 
     def add_finding(
         self,
@@ -98,7 +107,8 @@ class BasePlugin(ABC):
             "plugin_family": self.PLUGIN_FAMILY,
             "plugin_version": self.PLUGIN_VERSION,
             "target": self.url,
-            "findings": [f.to_dict() for f in self.findings]
+            "findings": [f.to_dict() for f in self.findings],
+            "errors": self.plugin_errors
         }
 
     async def run_isolated(
@@ -107,6 +117,7 @@ class BasePlugin(ABC):
         discovered_subdomains: Optional[List[Dict[str, Any]]] = None,
         discovered_urls: Optional[List[str]] = None,
         existing_findings: Optional[List[Finding]] = None,
+        ctx: Optional[ScanContext] = None,
     ) -> List[Finding]:
         """
         Run the plugin in an isolated subprocess via runner.py.
@@ -177,6 +188,10 @@ class BasePlugin(ABC):
                     findings.append(Finding.from_dict(f_dict))
                 except Exception as e:
                     log.warning(f"Failed to deserialize isolated finding: {e}")
+
+            if ctx is not None:
+                for check_name, target, error_summary in result_dict.get("errors", []):
+                    ctx.add_scan_error(check_name, target, error_summary)
 
             return findings
 

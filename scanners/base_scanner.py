@@ -96,6 +96,12 @@ class BaseScanner(ABC):
         self.log = logger.bind(scanner=self.__class__.__name__)
         self._request_count: int = 0
 
+    def add_error(self, check_name: str, error: Exception) -> None:
+        """Log a check failure and register it in ScanContext's scan_errors."""
+        err_msg = str(error)
+        self.log.debug(f"[{check_name}] failed for {self.ctx.target}: {err_msg}")
+        self.ctx.add_scan_error(check_name, self.ctx.target, err_msg)
+
     # ------------------------------------------------------------------
     # Convenience properties
     # ------------------------------------------------------------------
@@ -144,6 +150,7 @@ class BaseScanner(ABC):
         tags: Optional[List[str]] = None,
         verified: bool = False,
         false_positive_risk: str = "LOW",
+        verification_method: str = "unverified",
     ) -> Finding:
         """
         Create a :class:`~core.findings.Finding` pre-filled with this
@@ -161,6 +168,7 @@ class BaseScanner(ABC):
             tags:                Optional list of string labels.
             verified:            True if the finding is confirmed exploitable.
             false_positive_risk: ``LOW`` | ``MEDIUM`` | ``HIGH``.
+            verification_method: ``unverified`` | ``csp_present`` | ``browser_confirmed_execution`` | ``browser_confirmed_no_execution``.
 
         Returns:
             A fully-populated :class:`~core.findings.Finding` instance.
@@ -178,6 +186,7 @@ class BaseScanner(ABC):
             tags=tags or [],
             verified=verified,
             false_positive_risk=false_positive_risk,  # type: ignore[arg-type]
+            verification_method=verification_method,  # type: ignore[arg-type]
         )
 
     # ------------------------------------------------------------------

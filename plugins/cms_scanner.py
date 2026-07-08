@@ -1,4 +1,5 @@
 import re
+import httpx
 from bs4 import BeautifulSoup
 from .base_plugin import BasePlugin
 from utils.helpers import make_web_request
@@ -45,7 +46,11 @@ class CMSPlugin(BasePlugin):
         # Probe index first
         try:
             index_res = make_web_request(self.url, timeout=self.timeout)
-        except Exception:
+        except httpx.RequestError as e:
+            self.add_error("WordPress Index Probe HTTP Request", e)
+            index_res = None
+        except Exception as e:
+            self.add_error("WordPress Index Probe Generic Exception", e)
             index_res = None
 
         if index_res and index_res.status_code == 200:
@@ -64,8 +69,9 @@ class CMSPlugin(BasePlugin):
                 version_match = re.search(r"WordPress\s+([0-9\.]+)", gen_meta["content"])
                 if version_match:
                     version = version_match.group(1)
-        except Exception:
-            pass
+        except Exception as e:
+            # BeautifulSoup and regex parsing can raise miscellaneous parser/attribute errors
+            self.add_error("WordPress Version Extraction", e)
 
         self.add_finding(
             title="WordPress CMS Detected",
@@ -83,7 +89,11 @@ class CMSPlugin(BasePlugin):
         xmlrpc_url = f"{self.url}/xmlrpc.php"
         try:
             xmlrpc_res = make_web_request(xmlrpc_url, timeout=self.timeout)
-        except Exception:
+        except httpx.RequestError as e:
+            self.add_error("WordPress XML-RPC Probe HTTP Request", e)
+            xmlrpc_res = None
+        except Exception as e:
+            self.add_error("WordPress XML-RPC Probe Generic Exception", e)
             xmlrpc_res = None
 
         if xmlrpc_res and xmlrpc_res.status_code == 200 and "XML-RPC server accepts POST requests" in xmlrpc_res.text:
@@ -101,7 +111,11 @@ class CMSPlugin(BasePlugin):
         user_url = f"{self.url}/wp-json/wp/v2/users"
         try:
             user_res = make_web_request(user_url, timeout=self.timeout)
-        except Exception:
+        except httpx.RequestError as e:
+            self.add_error("WordPress User Enumeration REST API HTTP Request", e)
+            user_res = None
+        except Exception as e:
+            self.add_error("WordPress User Enumeration REST API Generic Exception", e)
             user_res = None
 
         if user_res and user_res.status_code == 200 and "slug" in user_res.text:
@@ -117,8 +131,9 @@ class CMSPlugin(BasePlugin):
                         remediation="Restrict public access to wp-json/wp/v2/users REST API endpoint.",
                         cvss=5.3
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                # json() parsing or list comprehension can raise ValueError/AttributeError
+                self.add_error("WordPress Username Enumeration Parse", e)
 
         # WP User Enumeration — Author archive redirect method
         # Requesting ?author=N causes WordPress to 301-redirect to /author/<slug>/
@@ -144,7 +159,11 @@ class CMSPlugin(BasePlugin):
                 author_res = make_web_request(
                     author_url, timeout=self.timeout, allow_redirects=False
                 )
-            except Exception:
+            except httpx.RequestError as e:
+                self.add_error(f"WordPress Author Probe HTTP Request {author_id}", e)
+                continue
+            except Exception as e:
+                self.add_error(f"WordPress Author Probe Generic Exception {author_id}", e)
                 continue
 
             if author_res is None:
@@ -195,7 +214,11 @@ class CMSPlugin(BasePlugin):
             readme_url = f"{self.url}/wp-content/plugins/{slug}/readme.txt"
             try:
                 readme_res = make_web_request(readme_url, timeout=self.timeout)
-            except Exception:
+            except httpx.RequestError as e:
+                self.add_error(f"WordPress Plugin Readme Probe HTTP Request {slug}", e)
+                continue
+            except Exception as e:
+                self.add_error(f"WordPress Plugin Readme Probe Generic Exception {slug}", e)
                 continue
 
             if readme_res is None or readme_res.status_code != 200:
@@ -240,7 +263,11 @@ class CMSPlugin(BasePlugin):
         # Test Administrator panel and media assets
         try:
             res = make_web_request(f"{self.url}/administrator/", timeout=self.timeout)
-        except Exception:
+        except httpx.RequestError as e:
+            self.add_error("Joomla Admin Panel Probe HTTP Request", e)
+            res = None
+        except Exception as e:
+            self.add_error("Joomla Admin Panel Probe Generic Exception", e)
             res = None
 
         if res and (res.status_code == 200 or "joomla" in res.text.lower()):
@@ -254,7 +281,11 @@ class CMSPlugin(BasePlugin):
         for cfile in config_files:
             try:
                 cres = make_web_request(f"{self.url}{cfile}", timeout=self.timeout)
-            except Exception:
+            except httpx.RequestError as e:
+                self.add_error(f"Joomla Config Exposure HTTP Request {cfile}", e)
+                cres = None
+            except Exception as e:
+                self.add_error(f"Joomla Config Exposure Generic Exception {cfile}", e)
                 cres = None
 
             if cres and cres.status_code == 200 and ("$host" in cres.text or "$password" in cres.text):
@@ -277,7 +308,11 @@ class CMSPlugin(BasePlugin):
 
         try:
             res = make_web_request(f"{self.url}/core/misc/drupal.js", timeout=self.timeout)
-        except Exception:
+        except httpx.RequestError as e:
+            self.add_error("Drupal JS Probe HTTP Request", e)
+            res = None
+        except Exception as e:
+            self.add_error("Drupal JS Probe Generic Exception", e)
             res = None
 
         if res and res.status_code == 200:
@@ -286,7 +321,11 @@ class CMSPlugin(BasePlugin):
             # Check headers/meta generator
             try:
                 idx_res = make_web_request(self.url, timeout=self.timeout)
-            except Exception:
+            except httpx.RequestError as e:
+                self.add_error("Drupal Index Generator Probe HTTP Request", e)
+                idx_res = None
+            except Exception as e:
+                self.add_error("Drupal Index Generator Probe Generic Exception", e)
                 idx_res = None
 
             if idx_res and "Drupal" in idx_res.text:
@@ -299,7 +338,11 @@ class CMSPlugin(BasePlugin):
         version = "Unknown"
         try:
             changelog_res = make_web_request(f"{self.url}/CHANGELOG.txt", timeout=self.timeout)
-        except Exception:
+        except httpx.RequestError as e:
+            self.add_error("Drupal Changelog Probe HTTP Request", e)
+            changelog_res = None
+        except Exception as e:
+            self.add_error("Drupal Changelog Probe Generic Exception", e)
             changelog_res = None
 
         if changelog_res and changelog_res.status_code == 200:
@@ -339,5 +382,6 @@ class CMSPlugin(BasePlugin):
                         cve_ids=["CVE-2018-7600"],
                         cvss=9.8
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                # String conversion or range checking can raise miscellaneous errors
+                self.add_error("Drupalgeddon Version Vulnerability Logic", e)

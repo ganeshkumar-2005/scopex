@@ -152,7 +152,9 @@ class ScanOrchestrator:
                 if scanners_list == "all":
                     scanners_list = list(_SCANNER_REGISTRY.keys())
                 scanners_to_run = list(scanners_list)
-            except Exception:
+            except Exception as e:
+                self.log.debug(f"Failed to load profile {ctx.profile}: {e}")
+                ctx.add_scan_error("Orchestrator Profile Load", ctx.profile, str(e))
                 scanners_to_run = list(_SCANNER_REGISTRY.keys())
 
         # Resume support: restore previous results if checkpoint specified
@@ -211,7 +213,9 @@ class ScanOrchestrator:
                 try:
                     from plugins import PLUGIN_REGISTRY
                     plugin_keys = list(PLUGIN_REGISTRY.keys())
-                except Exception:
+                except Exception as e:
+                    self.log.debug(f"Failed to get plugins list: {e}")
+                    ctx.add_scan_error("Orchestrator Plugins Import Check", "plugins", str(e))
                     plugin_keys = []
                 
                 active_plugins_count = 0
@@ -467,6 +471,7 @@ class ScanOrchestrator:
                     discovered_subdomains=subdomain_dicts,
                     discovered_urls=ctx.discovered_urls,
                     existing_findings=result.findings,
+                    ctx=ctx,
                 )
                 
                 # Add findings to the result

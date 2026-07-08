@@ -125,7 +125,9 @@ class PortScanner(BaseScanner):
             # Try running with OS detection first
             try:
                 return nm.scan(host, ports_str, arguments="-sT -sV -O")
-            except Exception:
+            except Exception as e:
+                self.log.debug(f"Nmap scan with OS detection failed: {e}")
+                self.add_error("Nmap Scan OS Detection", e)
                 # Fallback to no OS detection (e.g. if running without root/admin privileges)
                 return nm.scan(host, ports_str, arguments="-sT -sV")
 
@@ -183,12 +185,15 @@ class PortScanner(BaseScanner):
                 writer.close()
                 try:
                     await writer.wait_closed()
-                except Exception:
+                except Exception as e:
+                    self.log.debug(f"Socket close wait failed: {e}")
                     pass
                 return {"port": port, "service": service, "open": True, "banner": banner}
             except (asyncio.TimeoutError, ConnectionRefusedError, OSError):
                 return {"port": port, "service": service, "open": False}
-            except Exception:
+            except Exception as e:
+                self.log.debug(f"Socket connection on port {port} failed: {e}")
+                self.add_error(f"Port Socket Check Generic Exception {port}", e)
                 return {"port": port, "service": service, "open": False}
 
     async def _grab_banner(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, host: str) -> str:
@@ -207,5 +212,6 @@ class PortScanner(BaseScanner):
                 if line.lower().startswith("server:"):
                     return line.strip()
             return ""
-        except Exception:
+        except Exception as e:
+            self.log.debug(f"Banner grab failed: {e}")
             return ""

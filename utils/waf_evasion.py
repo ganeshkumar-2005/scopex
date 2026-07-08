@@ -281,7 +281,13 @@ class WAFEvasion:
         }
         try:
             resp_body: str = response.text.lower()
-        except Exception:
+        except UnicodeDecodeError as e:
+            from loguru import logger
+            logger.debug(f"UnicodeDecodeError reading WAF probe response text: {e}")
+            resp_body = ""
+        except Exception as e:
+            from loguru import logger
+            logger.debug(f"Generic exception reading WAF probe response text: {e}")
             resp_body = ""
 
         # Step 3: Signature matching per vendor

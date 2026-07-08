@@ -42,7 +42,9 @@ class AsyncCrawler:
         try:
             parsed = urllib.parse.urlparse(self.root_url)
             self._root_host = (parsed.hostname or "").lower()
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[AsyncCrawler Init] failed to parse target {self.root_url}: {e}")
+            self.ctx.add_scan_error("AsyncCrawler Init urlparse", self.root_url, str(e))
             self._root_host = ""
 
     async def crawl(self) -> Dict:
@@ -110,8 +112,9 @@ class AsyncCrawler:
             root_parsed = urllib.parse.urlparse(self.root_url)
             if root_parsed.query:
                 urls_with_params.add(self.root_url)
-        except Exception:
-            pass
+        except Exception as e:
+            self.log.debug(f"[AsyncCrawler Root Query Check] failed: {e}")
+            self.ctx.add_scan_error("AsyncCrawler Root Query Check", self.root_url, str(e))
 
         self.log.info(
             f"Crawl done: {len(visited)} pages, {len(urls_with_params)} param-URLs, "
@@ -133,7 +136,13 @@ class AsyncCrawler:
                 if "text/html" not in content_type.lower():
                     return None
                 return (resp.text, resp.status_code)
-            except Exception:
+            except httpx.RequestError as e:
+                self.log.debug(f"[_fetch_page] HTTP RequestError on {url}: {e}")
+                self.ctx.add_scan_error("AsyncCrawler HTTP Fetch", url, str(e))
+                return None
+            except Exception as e:
+                self.log.debug(f"[_fetch_page] generic error on {url}: {e}")
+                self.ctx.add_scan_error("AsyncCrawler Generic Fetch", url, str(e))
                 return None
 
     def _parse_page(self, page_url: str, html_text: str) -> tuple:
@@ -157,7 +166,9 @@ class AsyncCrawler:
                 )
                 if self._is_same_host(clean):
                     new_urls.append(clean)
-            except Exception:
+            except Exception as e:
+                self.log.debug(f"[_parse_page Link Processing] failed on {href} from {page_url}: {e}")
+                self.ctx.add_scan_error("AsyncCrawler link parse", page_url, str(e))
                 continue
 
         # Extract forms
@@ -170,7 +181,9 @@ class AsyncCrawler:
                     (parsed_action.scheme, parsed_action.netloc, parsed_action.path,
                      parsed_action.params, parsed_action.query, "")
                 )
-            except Exception:
+            except Exception as e:
+                self.log.debug(f"[_parse_page Form Processing] failed on action {action} from {page_url}: {e}")
+                self.ctx.add_scan_error("AsyncCrawler form action parse", page_url, str(e))
                 clean_action = page_url
 
             if not self._is_same_host(clean_action):
@@ -198,7 +211,9 @@ class AsyncCrawler:
         try:
             host = (urllib.parse.urlparse(url).hostname or "").lower()
             return host == self._root_host
-        except Exception:
+        except Exception as e:
+            self.log.debug(f"[_is_same_host] failed on {url}: {e}")
+            self.ctx.add_scan_error("AsyncCrawler _is_same_host", url, str(e))
             return False
 
 
@@ -223,7 +238,9 @@ class Crawler:
             url_host = (urllib.parse.urlparse(url).hostname or "").lower()
             root_host = (urllib.parse.urlparse(self.root_url).hostname or "").lower()
             return url_host == root_host
-        except Exception:
+        except Exception as e:
+            from loguru import logger
+            logger.debug(f"[Legacy Crawler _is_same_host] failed on {url}: {e}")
             return False
 
     def crawl(self) -> dict:
@@ -242,7 +259,9 @@ class Crawler:
                     (parsed_current.scheme, parsed_current.netloc, parsed_current.path,
                      parsed_current.params, parsed_current.query, "")
                 )
-            except Exception:
+            except Exception as e:
+                from loguru import logger
+                logger.debug(f"[Legacy Crawler parse_current] failed on {current_url}: {e}")
                 continue
 
             if clean_current in visited or not self._is_same_host(clean_current):
@@ -268,7 +287,9 @@ class Crawler:
                         clean_action = urllib.parse.urlunparse(
                             (pa.scheme, pa.netloc, pa.path, pa.params, pa.query, "")
                         )
-                    except Exception:
+                    except Exception as e:
+                        from loguru import logger
+                        logger.debug(f"[Legacy Crawler form action] failed on {resolved_action}: {e}")
                         clean_action = resolved_action
 
                     if not self._is_same_host(clean_action):
@@ -296,7 +317,9 @@ class Crawler:
                         clean_url = urllib.parse.urlunparse(
                             (pu.scheme, pu.netloc, pu.path, pu.params, pu.query, "")
                         )
-                    except Exception:
+                    except Exception as e:
+                        from loguru import logger
+                        logger.debug(f"[Legacy Crawler link parse] failed on {resolved}: {e}")
                         continue
                     if self._is_same_host(clean_url):
                         if pu.query:
@@ -304,7 +327,13 @@ class Crawler:
                         if clean_url not in visited and clean_url not in queue:
                             queue.append(clean_url)
 
-            except Exception:
+            except httpx.RequestError as e:
+                from loguru import logger
+                logger.debug(f"[Legacy Crawler] HTTP request error on {clean_current}: {e}")
+                visited.add(clean_current)
+            except Exception as e:
+                from loguru import logger
+                logger.debug(f"[Legacy Crawler] generic error on {clean_current}: {e}")
                 visited.add(clean_current)
 
         try:
@@ -313,8 +342,9 @@ class Crawler:
                 urls_with_params.add(urllib.parse.urlunparse(
                     (rp.scheme, rp.netloc, rp.path, rp.params, rp.query, "")
                 ))
-        except Exception:
-            pass
+        except Exception as e:
+            from loguru import logger
+            logger.debug(f"[Legacy Crawler root query] failed on {self.root_url}: {e}")
 
         return {
             "urls_with_params": sorted(urls_with_params),

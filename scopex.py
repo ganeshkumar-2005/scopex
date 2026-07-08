@@ -299,8 +299,12 @@ def scan(
     for f in all_findings:
         color = severity_color(f.severity)
         icon = severity_icon(f.severity)
+        
+        ver_method = getattr(f, "verification_method", "unverified")
+        ver_suffix = f" ({ver_method})" if ver_method != "unverified" else ""
+        
         table.add_row(
-            f"[{color}]{icon} {f.severity}[/{color}]",
+            f"[{color}]{icon} {f.severity}{ver_suffix}[/{color}]",
             f.module,
             f.title,
             f.target
@@ -310,6 +314,12 @@ def scan(
         console.print(table)
     else:
         console.print("[bold green]Zero warnings or vulnerabilities detected on this target![/bold green]")
+
+    if ctx.scan_errors:
+        from collections import Counter
+        error_counts = Counter(err[0] for err in ctx.scan_errors)
+        err_summary = ", ".join(f"{k}: {v} failed check(s)" for k, v in error_counts.items())
+        console.print(f"\n[bold yellow]⚠️  Some checks failed to complete — see debug log ({err_summary})[/bold yellow]")
 
 @cli.command()
 @click.option("--input", "input_file", required=True, help="Input JSON scan results file.")

@@ -90,7 +90,11 @@ class WhoisScanner(BaseScanner):
                         break
                     response += chunk
                 return response.decode("utf-8", errors="ignore")
-        except Exception:
+        except socket.error as e:
+            self.add_error("WHOIS Query socket.error", e)
+            return ""
+        except Exception as e:
+            self.add_error("WHOIS Query Generic Exception", e)
             return ""
 
     # ------------------------------------------------------------------
@@ -298,8 +302,10 @@ class WhoisScanner(BaseScanner):
                                 "Renew the domain immediately and enable auto-renewal."
                             ),
                         ))
-            except Exception:
-                pass
+            except ValueError as e:
+                self.add_error("WHOIS Expiration Date Calculation Parse Error", e)
+            except Exception as e:
+                self.add_error("WHOIS Expiration Date Calculation Generic Exception", e)
 
         # 3. Check for DNSSEC status
         dnssec = whois_info.get("dnssec", "").lower()

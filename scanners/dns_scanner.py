@@ -32,7 +32,14 @@ class DNSScanner(BaseScanner):
             info_v4 = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
             ips_v4 = list({x[4][0] for x in info_v4})
             dns_records["A"] = ips_v4
-        except Exception:
+        except socket.gaierror as e:
+            self.add_error("DNS IPv4 Resolution socket.gaierror", e)
+            dns_records["A"] = []
+        except socket.error as e:
+            self.add_error("DNS IPv4 Resolution socket.error", e)
+            dns_records["A"] = []
+        except Exception as e:
+            self.add_error("DNS IPv4 Resolution Generic Exception", e)
             dns_records["A"] = []
 
         # AAAA records (IPv6)
@@ -40,7 +47,14 @@ class DNSScanner(BaseScanner):
             info_v6 = socket.getaddrinfo(host, None, socket.AF_INET6, socket.SOCK_STREAM)
             ips_v6 = list({x[4][0] for x in info_v6})
             dns_records["AAAA"] = ips_v6
-        except Exception:
+        except socket.gaierror as e:
+            self.add_error("DNS IPv6 Resolution socket.gaierror", e)
+            dns_records["AAAA"] = []
+        except socket.error as e:
+            self.add_error("DNS IPv6 Resolution socket.error", e)
+            dns_records["AAAA"] = []
+        except Exception as e:
+            self.add_error("DNS IPv6 Resolution Generic Exception", e)
             dns_records["AAAA"] = []
 
         # Check resolution
@@ -74,7 +88,11 @@ class DNSScanner(BaseScanner):
                         remediation="Ensure external DNS zones don't expose internal network topology.",
                         tags=["dns", "info-leak"],
                     ))
-            except Exception:
+            except (ValueError, IndexError) as e:
+                self.add_error("DNS Private IP Parse Error", e)
+                continue
+            except Exception as e:
+                self.add_error("DNS Private IP Parse Generic Exception", e)
                 continue
 
         # Reverse DNS (PTR)
@@ -82,7 +100,14 @@ class DNSScanner(BaseScanner):
             try:
                 ptr_info = socket.gethostbyaddr(dns_records["A"][0])
                 dns_records["PTR"] = [ptr_info[0]]
-            except Exception:
+            except socket.herror as e:
+                self.add_error("DNS PTR reverse lookup socket.herror", e)
+                dns_records["PTR"] = []
+            except socket.error as e:
+                self.add_error("DNS PTR reverse lookup socket.error", e)
+                dns_records["PTR"] = []
+            except Exception as e:
+                self.add_error("DNS PTR reverse lookup Generic Exception", e)
                 dns_records["PTR"] = []
 
         return findings
