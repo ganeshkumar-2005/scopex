@@ -121,14 +121,27 @@ class PortScanner(BaseScanner):
         loop = asyncio.get_running_loop()
 
         def _run():
-            nm = nmap.PortScanner()
-            # Try running with OS detection first
+            import subprocess
+            orig_popen = subprocess.Popen
+
+            # Intercept Popen to redirect stderr to DEVNULL to silence Npcap warnings on Windows
+            def silent_popen(*args, **kwargs):
+                if "stderr" not in kwargs or kwargs["stderr"] is None:
+                    kwargs["stderr"] = subprocess.DEVNULL
+                return orig_popen(*args, **kwargs)
+
+            subprocess.Popen = silent_popen
             try:
-                return nm.scan(host, ports_str, arguments="-sT -sV -O")
-            except Exception as e:
-                self.log.debug(f"Nmap scan with OS detection failed: {e}")
-                # Fallback to no OS detection (e.g. if running without root/admin privileges)
-                return nm.scan(host, ports_str, arguments="-sT -sV")
+                nm = nmap.PortScanner()
+                # Try running with OS detection first
+                try:
+                    return nm.scan(host, ports_str, arguments="-sT -sV -O")
+                except Exception as e:
+                    self.log.debug(f"Nmap scan with OS detection failed: {e}")
+                    # Fallback to no OS detection (e.g. if running without root/admin privileges)
+                    return nm.scan(host, ports_str, arguments="-sT -sV")
+            finally:
+                subprocess.Popen = orig_popen
 
         scan_result = await loop.run_in_executor(None, _run)
         open_ports = []
