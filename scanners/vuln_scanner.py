@@ -302,27 +302,45 @@ class VulnScanner(BaseScanner):
                         response = await self.get(test_url, follow_redirects=False)
                         if response is not None and response.status_code in (301, 302, 303, 307, 308):
                             location = response.headers.get("Location", "")
-                            if "google.com" in location:
-                                findings.append(self.finding(
-                                    title="Open Redirect Vulnerability Detected",
-                                    severity="HIGH",
-                                    description=(
-                                        f"The application redirects a user to an external destination based on "
-                                        f"user-controlled parameter '{param}' without proper validation."
-                                    ),
-                                    evidence={
-                                        "test_url": test_url,
-                                        "status_code": response.status_code,
-                                        "location_header": location,
-                                    },
-                                    remediation=(
-                                        "Implement strict whitelisting for redirection targets, validate parameters "
-                                        "against local routes only, or force local redirects by stripping external host names."
-                                    ),
-                                    target=test_url,
-                                    tags=["open-redirect"],
-                                ))
-                                return
+                            if location:
+                                is_match = False
+                                try:
+                                    parsed_loc = urllib.parse.urlparse(location)
+                                    netloc_lower = parsed_loc.netloc.lower()
+                                    if netloc_lower:
+                                        host_only = netloc_lower.split(':')[0]
+                                        if host_only == "google.com" or host_only.endswith(".google.com"):
+                                            is_match = True
+                                    else:
+                                        stripped = location.replace('\\', '/').lstrip('/')
+                                        if stripped.startswith("google.com"):
+                                            next_char = stripped[10:11]
+                                            if next_char in ("", "/", "?", "#"):
+                                                is_match = True
+                                except Exception:
+                                    pass
+
+                                if is_match:
+                                    findings.append(self.finding(
+                                        title="Open Redirect Vulnerability Detected",
+                                        severity="HIGH",
+                                        description=(
+                                            f"The application redirects a user to an external destination based on "
+                                            f"user-controlled parameter '{param}' without proper validation."
+                                        ),
+                                        evidence={
+                                            "test_url": test_url,
+                                            "status_code": response.status_code,
+                                            "location_header": location,
+                                        },
+                                        remediation=(
+                                            "Implement strict whitelisting for redirection targets, validate parameters "
+                                            "against local routes only, or force local redirects by stripping external host names."
+                                        ),
+                                        target=test_url,
+                                        tags=["open-redirect"],
+                                    ))
+                                    return
                     except httpx.RequestError as e:
                         self.add_error("Open Redirect Probe HTTP Request", e)
                     except Exception as e:
