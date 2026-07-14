@@ -127,7 +127,6 @@ class PortScanner(BaseScanner):
                 return nm.scan(host, ports_str, arguments="-sT -sV -O")
             except Exception as e:
                 self.log.debug(f"Nmap scan with OS detection failed: {e}")
-                self.add_error("Nmap Scan OS Detection", e)
                 # Fallback to no OS detection (e.g. if running without root/admin privileges)
                 return nm.scan(host, ports_str, arguments="-sT -sV")
 

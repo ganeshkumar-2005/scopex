@@ -48,13 +48,18 @@ class DNSScanner(BaseScanner):
             ips_v6 = list({x[4][0] for x in info_v6})
             dns_records["AAAA"] = ips_v6
         except socket.gaierror as e:
-            self.add_error("DNS IPv6 Resolution socket.gaierror", e)
+            # Domain having no IPv6 (AAAA) record is completely normal if IPv4 is resolved.
+            # Only report error if IPv4 resolution also failed.
+            if not dns_records.get("A"):
+                self.add_error("DNS IPv6 Resolution socket.gaierror", e)
             dns_records["AAAA"] = []
         except socket.error as e:
-            self.add_error("DNS IPv6 Resolution socket.error", e)
+            if not dns_records.get("A"):
+                self.add_error("DNS IPv6 Resolution socket.error", e)
             dns_records["AAAA"] = []
         except Exception as e:
-            self.add_error("DNS IPv6 Resolution Generic Exception", e)
+            if not dns_records.get("A"):
+                self.add_error("DNS IPv6 Resolution Generic Exception", e)
             dns_records["AAAA"] = []
 
         # Check resolution
