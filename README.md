@@ -20,9 +20,14 @@ Developed by **Ganesh Kumar**.
 ## 🔍 Features
 
 *   **Fully Asynchronous Core Engine**: Re-engineered execution loop running all 15 core scanners concurrently, delivering massive performance boosts.
+*   **High-Performance Passive & Active Subdomain Recon**: Queries Certificate Transparency logs (`crt.sh`) and passive databases (`HackerTarget`) in parallel with wildcard DNS signature filtering and `dnspython` async resolving.
+*   **Advanced Browser Fingerprint WAF Evasion**: Spoofs complete aligned browser profiles (User-Agents, sec-ch-ua client hints, fetch modes) and randomizes header sending order.
+*   **Context-Aware XSS & Parameter Fuzzing**: Injects reflection canary probes first to detect HTML body, attribute, script block, or HTML comment contexts, filtering payloads for targeted fuzzing.
+*   **Data-Flow DOM XSS Analysis**: Static analyzer tracking variable taint propagation (user-controlled sources to dangerous sinks like innerHTML/eval).
+*   **Active Proof-of-Concept Verification**: Verifies findings dynamically by exfiltrating DBMS version metadata in SQLi, and capturing console listeners / raw base64 screenshots inside a headless Playwright Chromium instance for XSS.
 *   **YAML Custom Rules Engine**: Scan targets using custom signature rules loaded from the `rules/` directory (matching URL paths, HTTP status codes, header regex, and body patterns).
 *   **Subprocess-Isolated Plugins**: Runs advanced plugins (Heartbleed, Open Relay, LDAP/DB passwordless logins) in fully isolated subprocesses over secure JSON pipelines.
-*   **Glassmorphic HTML Web Dashboard**: Lightweight built-in dashboard server serving interactive charts, search, raw evidence views, and PDF download options.
+*   **Glassmorphic HTML Web Dashboard**: Decoupled clean visual dashboard architecture serving interactive charts, search, raw evidence views, and PDF download options.
 *   **Dynamic Encoding-Aware Terminal UX**: Animated progress bars that dynamically scale to scanner tasks, with smart fallbacks to ASCII spinners on legacy Windows consoles.
 *   **OpenAPI Schema discovery**: Active parsing of Swagger/OpenAPI specifications to automatically resolve endpoints and parameter structures for downstream scanning.
 *   **Nuclei Integration**: Managed parallel execution of ProjectDiscovery's Nuclei scanner with real-time result deduplication.

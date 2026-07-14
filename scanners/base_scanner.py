@@ -216,20 +216,22 @@ class BaseScanner(ABC):
 
         # Apply rotating User-Agent / Accept-Language for WAF evasion
         if self.ctx.waf_evasion:
-            headers["User-Agent"] = random.choice(_USER_AGENTS)
-            headers["Accept-Language"] = random.choice(_ACCEPT_LANGUAGES)
-            headers["Accept"] = (
-                "text/html,application/xhtml+xml,application/xml;q=0.9,"
-                "image/avif,image/webp,*/*;q=0.8"
-            )
-            headers["Cache-Control"] = "no-cache"
-            headers["Pragma"] = "no-cache"
+            from utils.waf_evasion import WAFEvasion
+            profile = self.ctx.waf_evasion_profile or "stealth"
+            waf = WAFEvasion(profile=profile)
+            headers.update(waf.get_evasion_headers())
         else:
             headers.setdefault("User-Agent", _USER_AGENTS[0])
 
         # Auth headers from context (highest priority — always win)
         if self.ctx.auth and self.ctx.auth.auth_headers:
             headers.update(self.ctx.auth.auth_headers)
+
+        # Randomize order of headers if WAF evasion is enabled to prevent static header-order fingerprinting
+        if self.ctx.waf_evasion and headers:
+            items = list(headers.items())
+            random.shuffle(items)
+            headers = dict(items)
 
         return headers
 
