@@ -312,10 +312,10 @@ class BaseScanner(ABC):
             return resp
 
         except httpx.TimeoutException:
-            self.log.warning(f"GET timeout: {url}")
+            self.log.debug(f"GET timeout: {url}")
             return None
         except httpx.TooManyRedirects:
-            self.log.warning(f"Too many redirects: {url}")
+            self.log.debug(f"Too many redirects: {url}")
             return None
         except httpx.RequestError as exc:
             self.log.debug(f"GET request error: {url} — {exc}")
@@ -379,10 +379,10 @@ class BaseScanner(ABC):
             return resp
 
         except httpx.TimeoutException:
-            self.log.warning(f"POST timeout: {url}")
+            self.log.debug(f"POST timeout: {url}")
             return None
         except httpx.TooManyRedirects:
-            self.log.warning(f"Too many redirects on POST: {url}")
+            self.log.debug(f"Too many redirects on POST: {url}")
             return None
         except httpx.RequestError as exc:
             self.log.debug(f"POST request error: {url} — {exc}")
@@ -437,10 +437,10 @@ class BaseScanner(ABC):
             return resp
 
         except httpx.TimeoutException:
-            self.log.warning(f"{method.upper()} timeout: {url}")
+            self.log.debug(f"{method.upper()} timeout: {url}")
             return None
         except httpx.TooManyRedirects:
-            self.log.warning(f"Too many redirects on {method.upper()}: {url}")
+            self.log.debug(f"Too many redirects on {method.upper()}: {url}")
             return None
         except httpx.RequestError as exc:
             self.log.debug(f"{method.upper()} request error: {url} — {exc}")
