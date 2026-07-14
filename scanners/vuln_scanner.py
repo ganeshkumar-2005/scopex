@@ -79,20 +79,14 @@ class VulnScanner(BaseScanner):
     def _looks_like_custom_404(self, response: httpx.Response) -> bool:
         """
         Return True if *response* matches the custom-404 fingerprint,
-        indicating the server returned its generic "not found" page with
-        an HTTP 200 status code.
+        indicating the server returned its generic "not found" page.
         """
         if self._custom_404_fingerprint is None:
             return False
 
         fp = self._custom_404_fingerprint
 
-        # If the canary itself got a non-200, the server uses proper status
-        # codes — no custom-404 filtering needed.
-        if fp["status_code"] != 200:
-            return False
-
-        # The response we're testing must also be 200 to be a false positive
+        # The response we're testing must be 200 to be a false positive
         if response.status_code != 200:
             return False
 
@@ -408,6 +402,14 @@ class VulnScanner(BaseScanner):
                     continue
 
                 body = response.text or ""
+                
+                # If the file is not expected to be HTML (like config/key/code files) but the response is HTML,
+                # then it is a custom 404 error page / login wall false positive.
+                body_stripped = body.strip().lower()
+                is_html_content = body_stripped.startswith("<!doctype html") or "<html" in body_stripped or "<body" in body_stripped
+                if is_html_content and path not in ("robots.txt", "sitemap.xml"):
+                    continue
+
                 if not validator(body):
                     continue
 
