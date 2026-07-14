@@ -341,7 +341,7 @@ class ScanOrchestrator:
                 f"{len(ctx._form_targets)} forms"  # type: ignore[attr-defined]
             )
         except asyncio.TimeoutError:
-            self.log.warning("Crawler timed out after 60s")
+            self.log.debug("Crawler timed out after 60s")
         except ImportError:
             self.log.debug("AsyncCrawler not available; skipping crawler phase")
         except Exception as exc:
@@ -426,7 +426,7 @@ class ScanOrchestrator:
             self.log.info(f"Scanner '{name}' done: {len(findings)} finding(s)")
             return findings
         except asyncio.TimeoutError:
-            self.log.warning(f"Scanner '{name}' timed out after {timeout}s")
+            self.log.debug(f"Scanner '{name}' timed out after {timeout}s")
             return []
         except Exception as exc:
             self.log.error(f"Scanner '{name}' raised: {exc}", exc_info=True)

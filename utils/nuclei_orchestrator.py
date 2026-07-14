@@ -242,9 +242,9 @@ class NucleiOrchestrator:
                 if stderr:
                     stderr_text = stderr.decode(errors="replace")
                     if "error" in stderr_text.lower() or "fatal" in stderr_text.lower():
-                        self.log.warning(f"Nuclei stderr: {stderr_text[:300]}")
+                        self.log.debug(f"Nuclei stderr: {stderr_text[:300]}")
             except asyncio.TimeoutError:
-                self.log.warning(f"Nuclei timed out after {timeout}s; using partial results")
+                self.log.debug(f"Nuclei timed out after {timeout}s; using partial results")
                 try:
                     proc.kill()
                     await proc.communicate()

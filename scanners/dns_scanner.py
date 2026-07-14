@@ -105,14 +105,11 @@ class DNSScanner(BaseScanner):
             try:
                 ptr_info = socket.gethostbyaddr(dns_records["A"][0])
                 dns_records["PTR"] = [ptr_info[0]]
-            except socket.herror as e:
-                self.add_error("DNS PTR reverse lookup socket.herror", e)
+            except (socket.herror, socket.error):
+                # Reverse DNS PTR failure is extremely common for public IPs.
+                # It is not a scan defect, so we just set it empty without logging a scan error.
                 dns_records["PTR"] = []
-            except socket.error as e:
-                self.add_error("DNS PTR reverse lookup socket.error", e)
-                dns_records["PTR"] = []
-            except Exception as e:
-                self.add_error("DNS PTR reverse lookup Generic Exception", e)
+            except Exception:
                 dns_records["PTR"] = []
 
         return findings

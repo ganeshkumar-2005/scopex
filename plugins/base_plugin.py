@@ -196,7 +196,7 @@ class BasePlugin(ABC):
             return findings
 
         except asyncio.TimeoutError:
-            log.warning(f"Plugin isolation execution timed out after {timeout}s")
+            log.debug(f"Plugin isolation execution timed out after {timeout}s")
             try:
                 proc.kill()
                 await proc.communicate()
